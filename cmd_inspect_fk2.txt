@@ -1,0 +1,2 @@
+This file previously contained sqlite inspection helpers. They were removed when migrating to Postgres.
+Keeping this text file only for historical notes.
