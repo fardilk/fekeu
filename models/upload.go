@@ -15,4 +15,7 @@ type Upload struct {
 	Profile     Profile `gorm:"foreignKey:ProfileID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 	ContentType string  `gorm:"size:128"`
 	KeuanganID  *uint   `gorm:"index"` // FK to catatan_keuangans.id (nullable)
+	// Mark upload as failed for OCR processing (do not delete record so front-end/admin can review)
+	Failed       bool   `gorm:"default:false;index"`
+	FailedReason string `gorm:"size:255"`
 }

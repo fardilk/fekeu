@@ -208,7 +208,9 @@ func listImageFiles(dir string) []string {
 		if e.IsDir() {
 			continue
 		}
-		if !isSupportedExt(e.Name()) {
+		// include all files except OCR temp artifacts; processing will decide
+		// whether extension is supported and set proper failure messages.
+		if strings.Contains(e.Name(), ".ocr.") {
 			continue
 		}
 		out = append(out, e.Name())
@@ -243,7 +245,9 @@ func watchDirectory(dir string, profile models.Profile, ps *preloadState, worker
 				}
 				if ev.Op&fsnotify.Create == fsnotify.Create {
 					name := filepath.Base(ev.Name)
-					if !isSupportedExt(name) {
+					// ignore OCR temp files; otherwise allow all created files so
+					// we can surface 'file not recognized' for unsupported types.
+					if strings.Contains(name, ".ocr.") {
 						continue
 					}
 					pending[name] = time.Now()
@@ -332,6 +336,19 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 		return
 	}
 	up, upExists := ps.getUpload(name)
+	// Retry a few times to allow API handler to create Upload row before watcher races to create its own
+	if !upExists {
+		for attempt := 0; attempt < 3 && !upExists; attempt++ {
+			var dbUp models.Upload
+			if err := db.Where("store_path = ? OR file_name = ?", storePath, name).First(&dbUp).Error; err == nil {
+				up = &dbUp
+				upExists = true
+				ps.putUpload(up)
+				break
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
 	if upExists && up.KeuanganID != nil { // already linked
 		logV("SKIP upload already linked %s", name)
 		return
@@ -339,11 +356,17 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 
 	// Only run OCR if no catatan & (no upload OR upload without linkage)
 	var amt int64
-	var ocrConf float64
-	var ocrErr error
-	var found string
 	// defer heavy OCR until after we know we might need it
 	needOCR := true
+
+	// if extension is not supported (e.g., .pdf handled elsewhere or .exe/text),
+	// create upload and mark as not recognized so front-end sees the proper message.
+	if !isSupportedExt(name) {
+		// create upload if not exists (above logic will create it), but if it exists
+		// we still set Failed/FailedReason accordingly.
+		// Note: proceed to create upload by leaving upExists handling unchanged.
+		// After creation, mark failed here.
+	}
 
 	// If upload doesn't exist, create it (DB write)
 	if !upExists {
@@ -376,22 +399,91 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 	}
 
 	if needOCR {
-		amt, ocrConf, found, ocrErr = ocr.ExtractAmountFromImage(filePath)
-		if found != "" {
-			lf := strings.TrimSpace(found)
-			if strings.Contains(lf, ".") || strings.HasSuffix(lf, ",00") || strings.HasSuffix(lf, ".00") {
-				if amt%100 == 0 {
-					amt = amt / 100
+		// Use FindAllMatches to detect zero / multiple matches cases
+		matches, isLikelyNonAmount, mErr := ocr.FindAllMatches(filePath)
+		if mErr != nil {
+			logV("OCR fail %s: %v", name, mErr)
+			return
+		}
+		if len(matches) == 0 {
+			// no amount: differentiate logo-like images vs generic no-digits
+			up.Failed = true
+			if isLikelyNonAmount {
+				log.Printf("NO AMOUNT / likely non-amount for %s: marking upload failed and moving file to failed", name)
+				up.FailedReason = "File tidak dikenali, gunakan file lain!"
+				_ = db.Save(up).Error
+				_ = moveToFailed(filePath, name)
+				return
+			}
+			log.Printf("NO AMOUNT found for %s: marking upload failed and moving file to failed", name)
+			up.FailedReason = "Nominal tidak ditemukan, gunakan file lain"
+			_ = db.Save(up).Error
+			_ = moveToFailed(filePath, name)
+			return
+		}
+		if len(matches) > 1 {
+			// Try a best-match heuristic before giving up
+			if bestMatch, parsedAmt, ok := chooseBestMatch(matches); ok {
+				amt = parsedAmt
+				log.Printf("AMBIGUOUS OCR but chosen best match for %s => %s amount=%d", name, bestMatch, amt)
+			} else {
+				// Fallback: try a full-image extraction which may catch the primary amount
+				if fAmt, fConf, fFound, ferr := ocr.ExtractAmountFromImage(filePath); ferr == nil && fAmt > 0 {
+					// accept fallback if plausible (e.g., contains grouping or Rp or reasonable size)
+					// noop placeholder removed
+					// We use the same plausibility rules as the OCR package (approx):
+					if strings.Contains(strings.ToLower(fFound), "rp") || strings.Contains(fFound, ".") || strings.Contains(fFound, ",") || (fAmt > 9 && fAmt <= 10_000_000_000) {
+						amt = fAmt
+						log.Printf("AMBIGUOUS OCR fallback accepted for %s => %s amount=%d conf=%.3f", name, fFound, amt, fConf)
+					} else {
+						log.Printf("MULTIPLE AMOUNTS found for %s: marking upload failed and moving file to failed", name)
+						up.Failed = true
+						up.FailedReason = "Gagal! Gunakan file lain"
+						_ = db.Save(up).Error
+						_ = moveToFailed(filePath, name)
+						return
+					}
+				} else {
+					log.Printf("MULTIPLE AMOUNTS found for %s: marking upload failed and moving file to failed", name)
+					up.Failed = true
+					up.FailedReason = "Gagal! Gunakan file lain"
+					_ = db.Save(up).Error
+					_ = moveToFailed(filePath, name)
+					return
 				}
 			}
-		}
-		if ocrErr != nil {
-			logV("OCR fail %s: %v", name, ocrErr)
-			return
-		}
-		if amt <= 0 || ocrConf <= 0.15 {
-			logV("OCR low/conf %s amt=%d conf=%.2f", name, amt, ocrConf)
-			return
+		} else {
+			// single match: parse but keep a robust fallback
+			logV("single OCR match for %s: %v", name, matches)
+			pAmt, perr := ocr.ParseAmountFromMatch(matches[0])
+			if perr != nil {
+				logV("parse amount failed %s: %v", name, perr)
+				// try full-image extraction as a last resort
+				if fAmt, fConf, _, ferr := ocr.ExtractAmountFromImage(filePath); ferr == nil && fAmt > 0 {
+					amt = fAmt
+					logV("parse fallback accepted %s: %d conf=%.3f", name, amt, fConf)
+				} else {
+					return
+				}
+			} else {
+				// apply cents heuristic only when there is explicit cents-like suffix
+				lf := strings.TrimSpace(matches[0])
+				if centsRE.MatchString(lf) && pAmt%100 == 0 {
+					pAmt = pAmt / 100
+				}
+				// run a more expensive full-image extractor and prefer it if it's clearly better
+				if fAmt, fConf, fFound, ferr := ocr.ExtractAmountFromImage(filePath); ferr == nil && fAmt > 0 {
+					// prefer fallback when it yields a larger amount and reasonable confidence or currency hint
+					if fAmt > pAmt && (strings.Contains(strings.ToLower(fFound), "rp") || fConf > 0.2) {
+						amt = fAmt
+						logV("OCR fallback preferred for %s: fallback=%d conf=%.3f found=%s vs match=%d", name, fAmt, fConf, fFound, pAmt)
+					} else {
+						amt = pAmt
+					}
+				} else {
+					amt = pAmt
+				}
+			}
 		}
 	}
 
@@ -400,8 +492,16 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 		return
 	}
 
+	// determine owner user id: prefer upload's profile -> user
+	ownerUserID := profile.UserID
+	if up != nil && up.ProfileID != 0 {
+		var ownerProfile models.Profile
+		if err := db.First(&ownerProfile, up.ProfileID).Error; err == nil {
+			ownerUserID = ownerProfile.UserID
+		}
+	}
 	// create catatan + link
-	cat := models.CatatanKeuangan{UserID: profile.UserID, FileName: name, Amount: amt, Date: time.Now()}
+	cat := models.CatatanKeuangan{UserID: ownerUserID, FileName: name, Amount: amt, Date: time.Now()}
 	if err := db.Create(&cat).Error; err != nil {
 		if isUniqueConstraintError(err) { // fetch existing
 			var existing models.CatatanKeuangan
@@ -422,7 +522,7 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 		up.KeuanganID = &cat.ID
 		_ = db.Save(up).Error
 	}
-	log.Printf("CATATAN amount=%d linked file=%s upload=%d", cat.Amount, name, up.ID)
+	log.Printf("Pencatatan Sukses amount=%d linked file=%s upload=%d", cat.Amount, name, up.ID)
 	// Move the processed file out of public/keu into public/processed so new images are processed only once
 	if err := moveToProcessed(filepath.Join(dir, name), name); err != nil {
 		log.Printf("WARN failed to move processed file %s: %v", name, err)
@@ -532,12 +632,68 @@ func moveToProcessed(srcFullPath, name string) error {
 
 func copyRemove(src, dst string) error {
 	in, err := os.Open(src)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer in.Close()
 	out, err := os.Create(dst)
-	if err != nil { return err }
-	if _, err := io.Copy(out, in); err != nil { _ = out.Close(); _ = os.Remove(dst); return err }
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
 	_ = out.Close()
-	if err := os.Remove(src); err != nil { return err }
+	if err := os.Remove(src); err != nil {
+		return err
+	}
 	return nil
+}
+
+// moveToFailed moves a file to public/failed preserving the original filename.
+// It behaves similarly to moveToProcessed but without image re-encoding.
+func moveToFailed(srcFullPath, name string) error {
+	failedDir := filepath.Join("public", "failed")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		return err
+	}
+	dst := filepath.Join(failedDir, name)
+	if err := os.Rename(srcFullPath, dst); err == nil {
+		return nil
+	}
+	return copyRemove(srcFullPath, dst)
+}
+
+// chooseBestMatch tries to pick the most likely amount string from multiple OCR matches.
+// It returns (chosenMatch, parsedAmount, ok). The heuristic prefers strings containing
+// an explicit "Rp" or the largest numeric value (assuming totals are larger than ids).
+func chooseBestMatch(matches []string) (string, int64, bool) {
+	if len(matches) == 0 {
+		return "", 0, false
+	}
+	// prefer matches that contain Rp or other currency hints
+	for _, m := range matches {
+		if strings.Contains(strings.ToLower(m), "rp") || strings.Contains(strings.ToLower(m), "idr") {
+			if a, err := ocr.ParseAmountFromMatch(m); err == nil && a > 0 {
+				return m, a, true
+			}
+		}
+	}
+	// otherwise choose the numerically largest valid parse
+	var best string
+	var bestAmt int64
+	for _, m := range matches {
+		if a, err := ocr.ParseAmountFromMatch(m); err == nil {
+			if a > bestAmt {
+				bestAmt = a
+				best = m
+			}
+		}
+	}
+	if bestAmt > 0 {
+		return best, bestAmt, true
+	}
+	return "", 0, false
 }

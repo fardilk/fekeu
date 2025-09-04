@@ -107,30 +107,45 @@ func Run(dir string, dry bool, minConf float64) error {
 func moveToProcessed(srcFullPath, name string) error {
 	const maxBytes = 1_000_000
 	processedDir := filepath.Join("public", "processed")
-	if err := os.MkdirAll(processedDir, 0o755); err != nil { return err }
+	if err := os.MkdirAll(processedDir, 0o755); err != nil {
+		return err
+	}
 	dst := filepath.Join(processedDir, name)
 	fi, err := os.Stat(srcFullPath)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	if fi.Size() <= maxBytes { // fast path rename/copy
-		if err := os.Rename(srcFullPath, dst); err == nil { return nil }
+		if err := os.Rename(srcFullPath, dst); err == nil {
+			return nil
+		}
 		return copyRemove(srcFullPath, dst)
 	}
 	img, err := imaging.Open(srcFullPath)
 	if err != nil { // fallback raw
-		if err := os.Rename(srcFullPath, dst); err == nil { return nil }
+		if err := os.Rename(srcFullPath, dst); err == nil {
+			return nil
+		}
 		return copyRemove(srcFullPath, dst)
 	}
 	scale := math.Sqrt(float64(maxBytes) / float64(fi.Size()))
-	if scale > 0.95 { scale = 0.95 }
-	if scale < 0.1 { scale = 0.1 }
+	if scale > 0.95 {
+		scale = 0.95
+	}
+	if scale < 0.1 {
+		scale = 0.1
+	}
 	if scale < 1 {
-		w := img.Bounds().Dx(); h := img.Bounds().Dy()
+		w := img.Bounds().Dx()
+		h := img.Bounds().Dy()
 		nw := int(math.Max(1, math.Round(float64(w)*scale)))
 		nh := int(math.Max(1, math.Round(float64(h)*scale)))
 		img = imaging.Resize(img, nw, nh, imaging.Lanczos)
 	}
 	if err := imaging.Save(img, dst); err != nil {
-		if err := os.Rename(srcFullPath, dst); err == nil { return nil }
+		if err := os.Rename(srcFullPath, dst); err == nil {
+			return nil
+		}
 		return copyRemove(srcFullPath, dst)
 	}
 	_ = os.Remove(srcFullPath)
@@ -144,11 +159,23 @@ func moveToProcessed(srcFullPath, name string) error {
 }
 
 func copyRemove(src, dst string) error {
-	in, err := os.Open(src); if err != nil { return err }
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
 	defer in.Close()
-	out, err := os.Create(dst); if err != nil { return err }
-	if _, err := io.Copy(out, in); err != nil { _ = out.Close(); _ = os.Remove(dst); return err }
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
 	_ = out.Close()
-	if err := os.Remove(src); err != nil { return err }
+	if err := os.Remove(src); err != nil {
+		return err
+	}
 	return nil
 }

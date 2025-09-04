@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,132 +22,376 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
+
+// -------------------- helpers --------------------
 
 var centsRE = regexp.MustCompile(`[.,]\d{2}$`)
 
-func setupRoutes(r *gin.Engine) {
-	r.POST("/register", registerHandler)
-	r.POST("/login", loginHandler)
-	r.POST("/refresh", refreshHandler)
-	r.POST("/revoke_refresh", revokeRefreshHandler)
-	authGroup := r.Group("")
-	authGroup.Use(jwtAuthMiddleware())
-	authGroup.GET("/me", meHandler)
-	authGroup.POST("/catatan", createCatatanHandler)
-	authGroup.GET("/catatan", listCatatanHandler)
-	authGroup.GET("/catatan/revenue", revenueSummaryHandler)
-	authGroup.POST("/profile", createProfileHandler)
-	authGroup.GET("/profile", getProfileHandler)
-	authGroup.POST("/uploads", uploadFileHandler)
-	authGroup.GET("/uploads", listUploadsHandler)
-	authGroup.GET("/uploads/:id", getUploadHandler)
+func writeError(c *gin.Context, status int, code, msg string, extra gin.H) {
+	body := gin.H{"error": code}
+	if msg != "" {
+		body["message"] = msg
+	}
+	for k, v := range extra {
+		body[k] = v
+	}
+	c.AbortWithStatusJSON(status, body)
 }
 
+// upload constraints & file sniffing
+const maxUploadBytes = 1_000_000 // 1MB
+var allowedUploadMimes = map[string]struct{}{"image/jpeg": {}, "image/png": {}}
+var allowedUploadExts = map[string]struct{}{".jpg": {}, ".jpeg": {}, ".png": {}}
+
+// validateAndSniff reads <= maxUploadBytes+1, determines mime by extension + magic bytes, returns mime + full bytes.
+func validateAndSniff(f multipart.File, hdr *multipart.FileHeader) (string, []byte, error) {
+	if hdr.Size > maxUploadBytes {
+		return "", nil, errors.New("too_large")
+	}
+	// Read whole file (bounded by gin's multipart memory); copy into buffer
+	var buf bytes.Buffer
+	if _, err := io.CopyN(&buf, f, maxUploadBytes+1); err != nil && !errors.Is(err, io.EOF) {
+		return "", nil, err
+	}
+	b := buf.Bytes()
+	if len(b) > maxUploadBytes {
+		return "", nil, errors.New("too_large")
+	}
+	ext := strings.ToLower(filepath.Ext(hdr.Filename))
+	if _, ok := allowedUploadExts[ext]; !ok {
+		return "", nil, errors.New("unsupported_type")
+	}
+	// quick magic sniff (jpeg/png only)
+	mime := ""
+	if len(b) >= 4 && b[0] == 0xFF && b[1] == 0xD8 {
+		mime = "image/jpeg"
+	}
+	if len(b) >= 8 && string(b[:8]) == "\x89PNG\r\n\x1a\n" {
+		mime = "image/png"
+	}
+	if mime == "" { // fallback from extension map
+		if ext == ".jpg" || ext == ".jpeg" {
+			mime = "image/jpeg"
+		} else if ext == ".png" {
+			mime = "image/png"
+		}
+	}
+	if mime == "" {
+		return "", nil, errors.New("unsupported_type")
+	}
+	return mime, b, nil
+}
+
+// -------------------- auth & security helpers --------------------
+
+// jwtAuthMiddleware validates bearer token and sets context values
 func jwtAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing or invalid Authorization header"})
-			c.Abort()
+		h := c.GetHeader("Authorization")
+		if h == "" || !strings.HasPrefix(strings.ToLower(h), "bearer ") {
+			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 			return
 		}
-		tokenString := authHeader[7:]
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrInvalidKeyType
+		tokenStr := strings.TrimSpace(h[7:])
+		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method")
 			}
 			return jwtSecret, nil
 		})
 		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-			c.Abort()
+			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 			return
 		}
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid claims"})
-			c.Abort()
+			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 			return
 		}
-		username, _ := claims["username"].(string)
-		role, _ := claims["role"].(string)
-		c.Set("username", username)
-		if role != "" {
-			c.Set("role", role)
+		uidF, ok := claims["uid"].(float64)
+		if !ok {
+			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+			return
 		}
+		username, _ := claims["sub"].(string)
+		role, _ := claims["role"].(string)
+		var user models.User
+		if err := db.First(&user, uint(uidF)).Error; err != nil {
+			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+			return
+		}
+		c.Set("user", user)
+		c.Set("username", username)
+		c.Set("role", role)
 		c.Next()
 	}
+}
+
+func getUserFromContext(c *gin.Context) (models.User, bool) {
+	v, ok := c.Get("user")
+	if !ok {
+		return models.User{}, false
+	}
+	u, ok := v.(models.User)
+	return u, ok
+}
+
+// password helpers
+func hashPassword(pw string) ([]byte, error) {
+	return bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+}
+func checkPassword(hash []byte, pw string) bool {
+	return bcrypt.CompareHashAndPassword(hash, []byte(pw)) == nil
+}
+
+// refresh token persistence & helpers
+func storeRefreshToken(u models.User, raw string, ttl time.Duration) (*models.RefreshToken, error) {
+	h := sha256.Sum256([]byte(raw))
+	rt := &models.RefreshToken{UserID: u.ID, TokenHash: hex.EncodeToString(h[:]), ExpiresAt: time.Now().Add(ttl)}
+	if err := db.Create(rt).Error; err != nil {
+		return nil, err
+	}
+	return rt, nil
+}
+func findRefreshTokenByRaw(raw string) (*models.RefreshToken, error) {
+	h := sha256.Sum256([]byte(raw))
+	var rt models.RefreshToken
+	if err := db.Where("token_hash = ?", hex.EncodeToString(h[:])).First(&rt).Error; err != nil {
+		return nil, err
+	}
+	if rt.Revoked || time.Now().After(rt.ExpiresAt) {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &rt, nil
+}
+
+// token generation
+func generateAccessToken(u models.User, roleName string, ttl time.Duration) (string, error) {
+	claims := jwt.MapClaims{
+		"sub":  u.Username,
+		"uid":  u.ID,
+		"role": roleName,
+		"exp":  time.Now().Add(ttl).Unix(),
+		"iat":  time.Now().Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+func randomHex(n int) string { b := make([]byte, n); _, _ = rand.Read(b); return hex.EncodeToString(b) }
+
+// register/login/refresh/revoke/me handlers
+func registerHandler(c *gin.Context) {
+	var req struct{ Username, Password string }
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Username) == "" || len(req.Password) < 6 {
+		writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
+		return
+	}
+	var cnt int64
+	db.Model(&models.User{}).Where("username = ?", req.Username).Count(&cnt)
+	if cnt > 0 {
+		writeError(c, http.StatusConflict, "duplicate", "username taken", nil)
+		return
+	}
+	hpw, _ := hashPassword(req.Password)
+	// default role user
+	var role models.Role
+	db.Where("name = ?", "user").First(&role)
+	rid := role.ID
+	user := models.User{Username: req.Username, HashedPassword: hpw, RoleID: &rid}
+	if err := db.Create(&user).Error; err != nil {
+		writeError(c, http.StatusInternalServerError, "create_failed", "", nil)
+		return
+	}
+	// auto create profile placeholder
+	prof := models.Profile{UserID: user.ID, Name: user.Username}
+	_ = db.Create(&prof).Error
+	c.JSON(http.StatusOK, gin.H{"id": user.ID})
+}
+
+func loginHandler(c *gin.Context) {
+	var req struct{ Username, Password string }
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
+		return
+	}
+	var user models.User
+	if err := db.Where("username = ?", req.Username).First(&user).Error; err != nil {
+		writeError(c, http.StatusUnauthorized, "invalid_credentials", "", nil)
+		return
+	}
+	if !checkPassword(user.HashedPassword, req.Password) {
+		writeError(c, http.StatusUnauthorized, "invalid_credentials", "", nil)
+		return
+	}
+	roleName := "user"
+	if user.RoleID != nil {
+		var r models.Role
+		if err := db.First(&r, *user.RoleID).Error; err == nil {
+			roleName = r.Name
+		}
+	}
+	at, err := generateAccessToken(user, roleName, 15*time.Minute)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "token_failed", "", nil)
+		return
+	}
+	rawRT := randomHex(32)
+	if _, err := storeRefreshToken(user, rawRT, 7*24*time.Hour); err != nil {
+		writeError(c, http.StatusInternalServerError, "token_failed", "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"access_token": at, "refresh_token": rawRT, "token_type": "bearer", "expires_in": 900})
+}
+
+func refreshHandler(c *gin.Context) {
+	var req struct {
+		RefreshToken string `json:"refresh_token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
+		return
+	}
+	rt, err := findRefreshTokenByRaw(req.RefreshToken)
+	if err != nil {
+		writeError(c, http.StatusUnauthorized, "invalid_refresh", "", nil)
+		return
+	}
+	var user models.User
+	if err := db.First(&user, rt.UserID).Error; err != nil {
+		writeError(c, http.StatusUnauthorized, "invalid_refresh", "", nil)
+		return
+	}
+	roleName := "user"
+	if user.RoleID != nil {
+		var r models.Role
+		if err := db.First(&r, *user.RoleID).Error; err == nil {
+			roleName = r.Name
+		}
+	}
+	at, err := generateAccessToken(user, roleName, 15*time.Minute)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "token_failed", "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"access_token": at, "token_type": "bearer", "expires_in": 900})
+}
+
+func revokeRefreshHandler(c *gin.Context) {
+	var req struct {
+		RefreshToken string `json:"refresh_token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_body", err.Error(), nil)
+		return
+	}
+	rt, err := findRefreshTokenByRaw(req.RefreshToken)
+	if err != nil {
+		writeError(c, http.StatusNotFound, "not_found", "refresh token not found", nil)
+		return
+	}
+	rt.Revoked = true
+	if err := db.Save(rt).Error; err != nil {
+		writeError(c, http.StatusInternalServerError, "revoke_failed", "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "refresh token revoked"})
 }
 
 func meHandler(c *gin.Context) {
 	usernameVal, _ := c.Get("username")
 	if usernameVal == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "context missing username"})
+		writeError(c, http.StatusInternalServerError, "context_missing", "", nil)
 		return
 	}
-	username := usernameVal.(string)
-	c.JSON(http.StatusOK, gin.H{"username": username})
+	c.JSON(http.StatusOK, gin.H{"username": usernameVal.(string)})
 }
 
-// getUserFromContext fetches the currently authenticated user using the username set by jwtAuthMiddleware
-func getUserFromContext(c *gin.Context) (*models.User, bool) {
-	unameVal, _ := c.Get("username")
-	if unameVal == nil {
-		return nil, false
+// -------------------- profile --------------------
+
+func createProfileHandler(c *gin.Context) {
+	user, ok := getUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		return
 	}
-	uname := unameVal.(string)
-	var user models.User
-	if err := db.Where("username = ?", uname).First(&user).Error; err != nil {
-		return nil, false
+	var req struct {
+		Name                              string `json:"name" binding:"required"`
+		Address, Email, Phone, Occupation string
 	}
-	return &user, true
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_body", err.Error(), nil)
+		return
+	}
+	profile := models.Profile{UserID: user.ID, Name: req.Name, Address: req.Address, Email: req.Email, Phone: req.Phone, Occupation: req.Occupation}
+	if err := db.Create(&profile).Error; err != nil {
+		writeError(c, http.StatusInternalServerError, "create_failed", "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": profile.ID})
 }
 
-// createCatatanHandler creates a CatatanKeuangan for the authenticated user
+func getProfileHandler(c *gin.Context) {
+	user, ok := getUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		return
+	}
+	var p models.Profile
+	if err := db.Where("user_id = ?", user.ID).First(&p).Error; err != nil {
+		writeError(c, http.StatusNotFound, "not_found", "profile not found", nil)
+		return
+	}
+	c.JSON(http.StatusOK, p)
+}
+
+// -------------------- catatan --------------------
+
 func createCatatanHandler(c *gin.Context) {
 	user, ok := getUserFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var req struct {
 		FileName string `json:"file_name" binding:"required"`
 		Amount   int64  `json:"amount" binding:"required"`
-		Date     string `json:"date"` // optional ISO8601
+		Date     string `json:"date"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeError(c, http.StatusBadRequest, "invalid_body", err.Error(), nil)
 		return
 	}
-	// prevent duplicate file for the same user
 	var existing models.CatatanKeuangan
 	if err := db.Where("user_id = ? AND file_name = ?", user.ID, req.FileName).First(&existing).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "file already recorded"})
+		writeError(c, http.StatusConflict, "duplicate", "file already recorded", nil)
 		return
 	}
-
 	ct := models.CatatanKeuangan{UserID: user.ID, FileName: req.FileName, Amount: req.Amount}
 	if req.Date != "" {
 		if t, err := time.Parse(time.RFC3339, req.Date); err == nil {
 			ct.Date = t
+		} else {
+			ct.Date = time.Now()
 		}
 	} else {
 		ct.Date = time.Now()
 	}
 	if err := db.Create(&ct).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "create failed"})
+		writeError(c, http.StatusInternalServerError, "create_failed", "", nil)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"id": ct.ID})
 }
 
-// listCatatanHandler lists recent catatan for the authenticated user (admin sees all)
 func listCatatanHandler(c *gin.Context) {
 	role, _ := c.Get("role")
 	user, ok := getUserFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var items []models.CatatanKeuangan
@@ -150,18 +400,17 @@ func listCatatanHandler(c *gin.Context) {
 		q = q.Where("user_id = ?", user.ID)
 	}
 	if err := q.Order("id desc").Limit(200).Find(&items).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		writeError(c, http.StatusInternalServerError, "query_failed", "", nil)
 		return
 	}
 	c.JSON(http.StatusOK, items)
 }
 
-// revenueSummaryHandler returns a simple sum of Amount grouped by month
 func revenueSummaryHandler(c *gin.Context) {
 	role, _ := c.Get("role")
 	user, ok := getUserFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	type Result struct {
@@ -169,15 +418,13 @@ func revenueSummaryHandler(c *gin.Context) {
 		Total int64
 	}
 	var results []Result
-	// Basic SQL to group by month (works on sqlite and postgres)
 	q := db.Model(&models.CatatanKeuangan{})
 	if role != "administrator" {
 		q = q.Where("user_id = ?", user.ID)
 	}
-	// Use to_char for Postgres to group by YYYY-MM
 	rows, err := q.Select("to_char(date, 'YYYY-MM') as month, sum(amount) as total").Group("month").Rows()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		writeError(c, http.StatusInternalServerError, "query_failed", "", nil)
 		return
 	}
 	defer rows.Close()
@@ -189,261 +436,68 @@ func revenueSummaryHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, results)
 }
 
-func registerHandler(c *gin.Context) {
-	var req struct {
-		Username string `json:"username" binding:"required"`
-		Password string `json:"password" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	err := Register(req.Username, req.Password)
-	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "user registered successfully"})
-}
+// -------------------- uploads (atomic DB-first) --------------------
 
-func createProfileHandler(c *gin.Context) {
-	user, ok := getUserFromContext(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
-		return
-	}
-	var req struct {
-		Name       string `json:"name" binding:"required"`
-		Address    string `json:"address"`
-		Email      string `json:"email"`
-		Phone      string `json:"phone"`
-		Occupation string `json:"occupation"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	profile := models.Profile{UserID: user.ID, Name: req.Name, Address: req.Address, Email: req.Email, Phone: req.Phone, Occupation: req.Occupation}
-	if err := db.Create(&profile).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create profile"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"id": profile.ID})
-}
-
-func getProfileHandler(c *gin.Context) {
-	user, ok := getUserFromContext(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
-		return
-	}
-	var p models.Profile
-	if err := db.Where("user_id = ?", user.ID).First(&p).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
-		return
-	}
-	c.JSON(http.StatusOK, p)
-}
-
-func loginHandler(c *gin.Context) {
-	var req struct {
-		Username string `json:"username" binding:"required"`
-		Password string `json:"password" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	user, err := Login(req.Username, req.Password)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-		return
-	}
-	// Generate JWT token. Resolve role name from RoleID (we only store role_id now).
-	roleName := ""
-	if user.RoleID != nil {
-		var r models.Role
-		if err := db.First(&r, *user.RoleID).Error; err == nil {
-			roleName = r.Name
-		}
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"username": user.Username,
-		"role":     roleName,
-		"exp":      time.Now().Add(time.Hour * 24).Unix(),
-	})
-	tokenString, err := token.SignedString(jwtSecret)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
-		return
-	}
-	// create refresh token
-	refreshToken, err := createAndStoreRefreshToken(user.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create refresh token"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "login successful", "token": tokenString, "refresh_token": refreshToken})
-}
-
-// createAndStoreRefreshToken generates a random refresh token, stores its hash with expiry and returns the raw token string
-func createAndStoreRefreshToken(userID uint) (string, error) {
-	// generate random 32-byte token (hex)
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	token := hex.EncodeToString(b)
-	// hash for storage
-	h := sha256.Sum256([]byte(token))
-	th := hex.EncodeToString(h[:])
-	rt := models.RefreshToken{UserID: userID, TokenHash: th, ExpiresAt: time.Now().Add(30 * 24 * time.Hour)}
-	if err := db.Create(&rt).Error; err != nil {
-		return "", err
-	}
-	return token, nil
-}
-
-// helper to find refresh token record by raw token string
-func findRefreshTokenByRaw(token string) (*models.RefreshToken, error) {
-	h := sha256.Sum256([]byte(token))
-	th := hex.EncodeToString(h[:])
-	var rt models.RefreshToken
-	if err := db.Where("token_hash = ?", th).First(&rt).Error; err != nil {
-		return nil, err
-	}
-	return &rt, nil
-}
-
-// refreshHandler exchanges a refresh token for a new access token and rotates the refresh token
-func refreshHandler(c *gin.Context) {
-	var req struct {
-		RefreshToken string `json:"refresh_token" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	rt, err := findRefreshTokenByRaw(req.RefreshToken)
-	if err != nil || rt.Revoked || time.Now().After(rt.ExpiresAt) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
-		return
-	}
-	// load user
-	var user models.User
-	if err := db.First(&user, rt.UserID).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
-		return
-	}
-	// create access token
-	roleName := ""
-	if user.RoleID != nil {
-		var r models.Role
-		if err := db.First(&r, *user.RoleID).Error; err == nil {
-			roleName = r.Name
-		}
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"username": user.Username,
-		"role":     roleName,
-		"exp":      time.Now().Add(15 * time.Minute).Unix(),
-	})
-	tokenString, err := token.SignedString(jwtSecret)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
-		return
-	}
-	// rotate refresh token: revoke existing and create new one
-	db.Model(&models.RefreshToken{}).Where("id = ?", rt.ID).Update("revoked", true)
-	newRT, err := createAndStoreRefreshToken(user.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rotate refresh token"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"token": tokenString, "refresh_token": newRT})
-}
-
-// revokeRefreshHandler revokes a given refresh token (useful on logout)
-func revokeRefreshHandler(c *gin.Context) {
-	var req struct {
-		RefreshToken string `json:"refresh_token" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	rt, err := findRefreshTokenByRaw(req.RefreshToken)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "refresh token not found"})
-		return
-	}
-	rt.Revoked = true
-	if err := db.Save(rt).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke token"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "refresh token revoked"})
-}
-
-// uploadFileHandler handles multipart image upload for the current user's profile.
 func uploadFileHandler(c *gin.Context) {
 	user, ok := getUserFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
-	// ensure profile exists
 	var profile models.Profile
 	if err := db.Where("user_id = ?", user.ID).First(&profile).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "profile missing"})
+		writeError(c, http.StatusBadRequest, "profile_missing", "profile missing", nil)
 		return
 	}
 	folder := c.PostForm("folder")
 	if folder == "" {
-		folder = "default"
+		folder = "keu"
 	}
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file missing"})
+		writeError(c, http.StatusBadRequest, "missing_file", "file missing", nil)
 		return
 	}
-	if file.Size > 5*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large (max 5MB)"})
+	src, err := file.Open()
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "open_failed", "", nil)
 		return
 	}
-	// simple content type sniff via header
-	ct := file.Header.Get("Content-Type")
-	baseDir := uploadBaseDir()
+	mime, firstBytes, verr := func() (string, []byte, error) { defer src.Close(); return validateAndSniff(src, file) }()
+	if verr != nil {
+		switch verr.Error() {
+		case "too_large":
+			writeError(c, http.StatusBadRequest, "file_too_large", "file too large (max 1MB)", nil)
+		case "unsupported_type":
+			writeError(c, http.StatusBadRequest, "unsupported_type", "File tidak dikenali, gunakan file lain!", gin.H{"allowed": []string{"image/jpeg", "image/png"}})
+		default:
+			writeError(c, http.StatusBadRequest, "invalid_file", "", nil)
+		}
+		return
+	}
+	baseDir := "public"
 	relPath := folder + "/" + file.Filename
-	fullPath := baseDir + "/" + relPath
-	if err := os.MkdirAll(baseDir+"/"+folder, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "mkdir failed"})
+	fullPath := filepath.Join(baseDir, relPath)
+	storePath := filepath.ToSlash(filepath.Join("public", relPath))
+	// duplicate check
+	var existingUp models.Upload
+	if err := db.Where("profile_id = ? AND file_name = ?", profile.ID, file.Filename).First(&existingUp).Error; err == nil {
+		c.JSON(http.StatusOK, gin.H{"id": existingUp.ID, "path": relPath, "store_path": existingUp.StorePath, "catatan_id": existingUp.KeuanganID})
 		return
 	}
-	if err := c.SaveUploadedFile(file, fullPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed"})
-		return
-	}
+	// optional manual linkage
 	var keuID *uint
+	var catatanID *uint
 	if v := c.PostForm("keuangan_id"); v != "" {
-		// try to parse uint
-		var parsed uint64
-		parsed, _ = strconv.ParseUint(v, 10, 64)
-		if parsed != 0 {
+		if parsed, _ := strconv.ParseUint(v, 10, 64); parsed != 0 {
 			pv := uint(parsed)
 			keuID = &pv
 		}
 	}
-	// Build store path (public exposure path). Assume files served from 'public/' prefix.
-	storePath := "public/" + relPath
-	// Optional amount to auto-create catatan keuangan
-	var catatanID *uint
 	if amtStr := c.PostForm("amount"); amtStr != "" {
 		if amtVal, err := strconv.ParseInt(amtStr, 10, 64); err == nil && amtVal > 0 {
-			// check duplicate
 			var existing models.CatatanKeuangan
 			if err := db.Where("user_id = ? AND file_name = ?", user.ID, file.Filename).First(&existing).Error; err == nil {
-				// already exists, link to existing
 				keuID = &existing.ID
 				cid := existing.ID
 				catatanID = &cid
@@ -457,52 +511,66 @@ func uploadFileHandler(c *gin.Context) {
 			}
 		}
 	}
-	// If an upload record for this profile+filename already exists, return it
-	var existingUp models.Upload
-	if err := db.Where("profile_id = ? AND file_name = ?", profile.ID, file.Filename).First(&existingUp).Error; err == nil {
-		// If existing upload has no keuangan link, try OCR and link if possible (but avoid creating duplicate Catatan)
-		if existingUp.KeuanganID == nil {
-			if amt, conf, found, err := ocr.ExtractAmountFromImage(fullPath); err == nil && amt > 0 && conf > 0.15 {
-				// Normalize only if original OCR matched a decimal-like cents pattern
-				if found != "" {
-					lf := strings.TrimSpace(found)
-					if centsRE.MatchString(lf) {
-						if amt%100 == 0 {
-							amt = amt / 100
-						}
-					}
-				}
-				var existingCat models.CatatanKeuangan
-				if err := db.Where("user_id = ? AND file_name = ?", profile.UserID, existingUp.FileName).First(&existingCat).Error; err == nil {
-					existingUp.KeuanganID = &existingCat.ID
-					db.Save(&existingUp)
-				} else {
-					ct := models.CatatanKeuangan{UserID: profile.UserID, FileName: existingUp.FileName, Amount: amt, Date: time.Now()}
-					if err := db.Create(&ct).Error; err == nil {
-						existingUp.KeuanganID = &ct.ID
-						db.Save(&existingUp)
-					}
-				}
-			}
-		}
-		c.JSON(http.StatusOK, gin.H{"id": existingUp.ID, "path": relPath, "store_path": existingUp.StorePath, "catatan_id": existingUp.KeuanganID})
-		return
-	}
-
-	up := models.Upload{ProfileID: profile.ID, FileName: file.Filename, StorePath: storePath, KeuanganID: keuID, ContentType: ct}
+	up := models.Upload{ProfileID: profile.ID, FileName: file.Filename, StorePath: storePath, KeuanganID: keuID, ContentType: mime}
 	if err := db.Create(&up).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "db save failed"})
+		writeError(c, http.StatusInternalServerError, "db_save_failed", "", nil)
 		return
 	}
-	// extract amount using OCR and avoid creating duplicate Catatan
-	if amt, conf, found, err := ocr.ExtractAmountFromImage(fullPath); err == nil && amt > 0 && conf > 0.15 {
-		if found != "" {
-			lf := strings.TrimSpace(found)
-			if strings.Contains(lf, ".") || strings.HasSuffix(lf, ",00") || strings.HasSuffix(lf, ".00") {
-				if amt%100 == 0 {
-					amt = amt / 100
-				}
-			}
+	stagingDir := filepath.Join(baseDir, ".staging")
+	if err := os.MkdirAll(stagingDir, 0755); err != nil {
+		db.Delete(&up)
+		writeError(c, http.StatusInternalServerError, "mkdir_failed", "", nil)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		db.Delete(&up)
+		writeError(c, http.StatusInternalServerError, "mkdir_failed", "", nil)
+		return
+	}
+	tmpName := filepath.Join(stagingDir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), file.Filename))
+	if err := os.WriteFile(tmpName, firstBytes, 0644); err != nil {
+		db.Delete(&up)
+		writeError(c, http.StatusInternalServerError, "save_failed", "", nil)
+		return
+	}
+	if err := os.Rename(tmpName, fullPath); err != nil {
+		db.Delete(&up)
+		_ = os.Remove(tmpName)
+		writeError(c, http.StatusInternalServerError, "save_failed", "", nil)
+		return
+	}
+	matches, isLikelyNonAmount, err := ocr.FindAllMatches(fullPath)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "ocr_error", "", nil)
+		return
+	}
+	if len(matches) == 0 {
+		up.Failed = true
+		if isLikelyNonAmount {
+			up.FailedReason = "File tidak dikenali, gunakan file lain!"
+			db.Save(&up)
+			_ = os.Remove(fullPath)
+			writeError(c, http.StatusBadRequest, "unsupported_type", "File tidak dikenali, gunakan file lain!", gin.H{"allowed": []string{"image/jpeg", "image/png"}})
+			return
+		}
+		up.FailedReason = "Nominal tidak ditemukan, gunakan file lain"
+		db.Save(&up)
+		_ = os.Remove(fullPath)
+		writeError(c, http.StatusBadRequest, "amount_not_found", "Nominal tidak ditemukan, gunakan file lain", nil)
+		return
+	}
+	if len(matches) > 1 {
+		up.Failed = true
+		up.FailedReason = "Gagal! Gunakan file lain"
+		db.Save(&up)
+		_ = os.Remove(fullPath)
+		writeError(c, http.StatusBadRequest, "ambiguous_amount", "Gagal! Gunakan file lain", nil)
+		return
+	}
+	if amt, err := ocr.ParseAmountFromMatch(matches[0]); err == nil && amt > 0 {
+		lf := strings.TrimSpace(matches[0])
+		if (strings.Contains(lf, ".") || strings.HasSuffix(lf, ",00") || strings.HasSuffix(lf, ".00")) && amt%100 == 0 {
+			amt /= 100
 		}
 		var existingCat models.CatatanKeuangan
 		if err := db.Where("user_id = ? AND file_name = ?", profile.UserID, up.FileName).First(&existingCat).Error; err == nil {
@@ -523,12 +591,11 @@ func uploadFileHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"id": up.ID, "path": relPath, "store_path": storePath, "catatan_id": respCatID})
 }
 
-// listUploadsHandler returns uploads; admin sees all, user only own profile's uploads.
 func listUploadsHandler(c *gin.Context) {
 	role, _ := c.Get("role")
 	user, ok := getUserFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var profile models.Profile
@@ -539,18 +606,17 @@ func listUploadsHandler(c *gin.Context) {
 		q = q.Where("profile_id = ?", profile.ID)
 	}
 	if err := q.Order("id desc").Limit(100).Find(&uploads).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		writeError(c, http.StatusInternalServerError, "query_failed", "", nil)
 		return
 	}
 	c.JSON(http.StatusOK, uploads)
 }
 
-// getUploadHandler returns single upload if admin or owner.
 func getUploadHandler(c *gin.Context) {
 	role, _ := c.Get("role")
 	user, ok := getUserFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var profile models.Profile
@@ -558,12 +624,31 @@ func getUploadHandler(c *gin.Context) {
 	id := c.Param("id")
 	var up models.Upload
 	if err := db.First(&up, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		writeError(c, http.StatusNotFound, "not_found", "", nil)
 		return
 	}
 	if role != "administrator" && up.ProfileID != profile.ID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		writeError(c, http.StatusForbidden, "forbidden", "", nil)
 		return
 	}
 	c.JSON(http.StatusOK, up)
+}
+
+// -------------------- routes wiring --------------------
+func setupRoutes(r *gin.Engine) {
+	r.POST("/register", registerHandler)
+	r.POST("/login", loginHandler)
+	r.POST("/refresh", refreshHandler)
+	r.POST("/revoke", revokeRefreshHandler)
+	auth := r.Group("")
+	auth.Use(jwtAuthMiddleware())
+	auth.GET("/me", meHandler)
+	auth.POST("/profile", createProfileHandler)
+	auth.GET("/profile", getProfileHandler)
+	auth.POST("/catatan", createCatatanHandler)
+	auth.GET("/catatan", listCatatanHandler)
+	auth.GET("/catatan/revenue", revenueSummaryHandler)
+	auth.POST("/uploads", uploadFileHandler)
+	auth.GET("/uploads", listUploadsHandler)
+	auth.GET("/uploads/:id", getUploadHandler)
 }
