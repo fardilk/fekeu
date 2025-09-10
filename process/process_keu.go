@@ -159,6 +159,80 @@ func logV(format string, args ...any) {
 	}
 }
 
+// chooseBestAmount parses OCR matches and returns the most plausible amount and raw string.
+// Heuristics:
+// - parse all matches; apply cents scaling only when string ends with two decimals
+// - ignore tiny values (< 1000)
+// - prefer numbers with currency hints ("rp", "idr") and/or thousands separators
+// - otherwise take the numerically largest
+func chooseBestAmount(matches []string) (best int64, bestRaw string) {
+	// first pass: currency hinted
+	for _, m := range matches {
+		raw := strings.TrimSpace(m)
+		low := strings.ToLower(raw)
+		if !strings.Contains(low, "rp") && !strings.Contains(low, "idr") {
+			continue
+		}
+		amt, err := ocr.ParseAmountFromMatch(raw)
+		if err != nil || amt <= 0 {
+			continue
+		}
+		if centsRE.MatchString(raw) && amt%100 == 0 {
+			amt /= 100
+		}
+		if amt < 1000 {
+			continue
+		}
+		if amt > best {
+			best, bestRaw = amt, raw
+		}
+	}
+	if best > 0 {
+		return
+	}
+	// second pass: prefer with grouping separators
+	for _, m := range matches {
+		raw := strings.TrimSpace(m)
+		if !(strings.Contains(raw, ".") || strings.Contains(raw, ",")) {
+			continue
+		}
+		amt, err := ocr.ParseAmountFromMatch(raw)
+		if err != nil || amt <= 0 {
+			continue
+		}
+		if centsRE.MatchString(raw) && amt%100 == 0 {
+			amt /= 100
+		}
+		if amt < 1000 {
+			continue
+		}
+		if amt > best {
+			best, bestRaw = amt, raw
+		}
+	}
+	if best > 0 {
+		return
+	}
+	// final pass: largest numeric
+	for _, m := range matches {
+		raw := strings.TrimSpace(m)
+		amt, err := ocr.ParseAmountFromMatch(raw)
+		if err != nil || amt <= 0 {
+			continue
+		}
+		if centsRE.MatchString(raw) && amt%100 == 0 {
+			amt /= 100
+		}
+		if amt < 1000 {
+			continue
+		}
+		if amt > best {
+			best, bestRaw = amt, raw
+		}
+	}
+	return
+}
+
 // preloadAll fetches existing uploads and catatan to minimize per-file queries.
 func preloadAll(profile models.Profile) *preloadState {
 	ps := newPreloadState()
@@ -356,6 +430,7 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 
 	// Only run OCR if no catatan & (no upload OR upload without linkage)
 	var amt int64
+	var bestRaw string
 	// defer heavy OCR until after we know we might need it
 	needOCR := true
 
@@ -365,7 +440,6 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 		// create upload if not exists (above logic will create it), but if it exists
 		// we still set Failed/FailedReason accordingly.
 		// Note: proceed to create upload by leaving upExists handling unchanged.
-		// After creation, mark failed here.
 	}
 
 	// If upload doesn't exist, create it (DB write)
@@ -421,68 +495,20 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 			_ = moveToFailed(filePath, name)
 			return
 		}
-		if len(matches) > 1 {
-			// Try a best-match heuristic before giving up
-			if bestMatch, parsedAmt, ok := chooseBestMatch(matches); ok {
-				amt = parsedAmt
-				log.Printf("AMBIGUOUS OCR but chosen best match for %s => %s amount=%d", name, bestMatch, amt)
-			} else {
-				// Fallback: try a full-image extraction which may catch the primary amount
-				if fAmt, fConf, fFound, ferr := ocr.ExtractAmountFromImage(filePath); ferr == nil && fAmt > 0 {
-					// accept fallback if plausible (e.g., contains grouping or Rp or reasonable size)
-					// noop placeholder removed
-					// We use the same plausibility rules as the OCR package (approx):
-					if strings.Contains(strings.ToLower(fFound), "rp") || strings.Contains(fFound, ".") || strings.Contains(fFound, ",") || (fAmt > 9 && fAmt <= 10_000_000_000) {
-						amt = fAmt
-						log.Printf("AMBIGUOUS OCR fallback accepted for %s => %s amount=%d conf=%.3f", name, fFound, amt, fConf)
-					} else {
-						log.Printf("MULTIPLE AMOUNTS found for %s: marking upload failed and moving file to failed", name)
-						up.Failed = true
-						up.FailedReason = "Gagal! Gunakan file lain"
-						_ = db.Save(up).Error
-						_ = moveToFailed(filePath, name)
-						return
-					}
-				} else {
-					log.Printf("MULTIPLE AMOUNTS found for %s: marking upload failed and moving file to failed", name)
-					up.Failed = true
-					up.FailedReason = "Gagal! Gunakan file lain"
-					_ = db.Save(up).Error
-					_ = moveToFailed(filePath, name)
-					return
-				}
-			}
+		// Choose the best amount from all matches
+		if bAmt, bRaw := chooseBestAmount(matches); bAmt > 0 {
+			amt, bestRaw = bAmt, bRaw
 		} else {
-			// single match: parse but keep a robust fallback
-			logV("single OCR match for %s: %v", name, matches)
-			pAmt, perr := ocr.ParseAmountFromMatch(matches[0])
-			if perr != nil {
-				logV("parse amount failed %s: %v", name, perr)
-				// try full-image extraction as a last resort
-				if fAmt, fConf, _, ferr := ocr.ExtractAmountFromImage(filePath); ferr == nil && fAmt > 0 {
-					amt = fAmt
-					logV("parse fallback accepted %s: %d conf=%.3f", name, amt, fConf)
-				} else {
-					return
-				}
+			// Fallback: try a full-image extraction which may catch the primary amount
+			if fAmt, _, fFound, ferr := ocr.ExtractAmountFromImage(filePath); ferr == nil && fAmt > 0 {
+				amt, bestRaw = fAmt, fFound
 			} else {
-				// apply cents heuristic only when there is explicit cents-like suffix
-				lf := strings.TrimSpace(matches[0])
-				if centsRE.MatchString(lf) && pAmt%100 == 0 {
-					pAmt = pAmt / 100
-				}
-				// run a more expensive full-image extractor and prefer it if it's clearly better
-				if fAmt, fConf, fFound, ferr := ocr.ExtractAmountFromImage(filePath); ferr == nil && fAmt > 0 {
-					// prefer fallback when it yields a larger amount and reasonable confidence or currency hint
-					if fAmt > pAmt && (strings.Contains(strings.ToLower(fFound), "rp") || fConf > 0.2) {
-						amt = fAmt
-						logV("OCR fallback preferred for %s: fallback=%d conf=%.3f found=%s vs match=%d", name, fAmt, fConf, fFound, pAmt)
-					} else {
-						amt = pAmt
-					}
-				} else {
-					amt = pAmt
-				}
+				// Could not determine amount
+				up.Failed = true
+				up.FailedReason = "Nominal tidak ditemukan, gunakan file lain"
+				_ = db.Save(up).Error
+				_ = moveToFailed(filePath, name)
+				return
 			}
 		}
 	}
@@ -492,37 +518,54 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 		return
 	}
 
-	// determine owner user id: prefer upload's profile -> user
-	ownerUserID := profile.UserID
-	if up != nil && up.ProfileID != 0 {
-		var ownerProfile models.Profile
-		if err := db.First(&ownerProfile, up.ProfileID).Error; err == nil {
-			ownerUserID = ownerProfile.UserID
-		}
-	}
-	// create catatan + link
-	cat := models.CatatanKeuangan{UserID: ownerUserID, FileName: name, Amount: amt, Date: time.Now()}
-	if err := db.Create(&cat).Error; err != nil {
-		if isUniqueConstraintError(err) { // fetch existing
-			var existing models.CatatanKeuangan
-			if err2 := db.Where("user_id = ? AND file_name = ?", profile.UserID, name).First(&existing).Error; err2 == nil {
-				ps.putCat(&existing)
-				if up.KeuanganID == nil {
-					up.KeuanganID = &existing.ID
-					_ = db.Save(up).Error
-				}
-			}
-		} else {
-			log.Printf("ERROR create catatan %s: %v", name, err)
-		}
+	// by here, amt must be > 0
+	if amt <= 0 {
 		return
 	}
-	ps.putCat(&cat)
-	if up.KeuanganID == nil {
+
+	// Resolve owner from Upload (retry if needed)
+	ownerUserID := profile.UserID
+	for i := 0; i < 3 && up == nil; i++ { // small retry to avoid race
+		if !upExists {
+			var dbUp models.Upload
+			if err := db.Where("store_path = ? OR file_name = ?", storePath, name).First(&dbUp).Error; err == nil {
+				up = &dbUp
+				upExists = true
+				ps.putUpload(up)
+			}
+		}
+		if up != nil {
+			var ownerProfile models.Profile
+			if err := db.First(&ownerProfile, up.ProfileID).Error; err == nil {
+				ownerUserID = ownerProfile.UserID
+			}
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	// Create or fetch catatan for the correct owner
+	cat := models.CatatanKeuangan{UserID: ownerUserID, FileName: name, Amount: amt, Date: time.Now()}
+	if err := db.Create(&cat).Error; err != nil {
+		var existing models.CatatanKeuangan
+		if err2 := db.Where("user_id = ? AND file_name = ?", ownerUserID, name).First(&existing).Error; err2 == nil {
+			// Optionally update amount if new detection is clearly larger (e.g., fix from 20285 -> 600000)
+			if amt > existing.Amount && amt >= existing.Amount*2 {
+				existing.Amount = amt
+				_ = db.Save(&existing).Error
+			}
+			cat = existing
+		} else {
+			log.Printf("ERROR creating catatan for %s owner=%d: %v", name, ownerUserID, err)
+			return
+		}
+	}
+	// Link upload if present
+	if up != nil && up.KeuanganID == nil {
 		up.KeuanganID = &cat.ID
 		_ = db.Save(up).Error
 	}
-	log.Printf("Pencatatan Sukses amount=%d linked file=%s upload=%d", cat.Amount, name, up.ID)
+	log.Printf("Pencatatan Sukses amount=%d raw=%q owner=%d file=%s", amt, bestRaw, ownerUserID, name)
 	// Move the processed file out of public/keu into public/processed so new images are processed only once
 	if err := moveToProcessed(filepath.Join(dir, name), name); err != nil {
 		log.Printf("WARN failed to move processed file %s: %v", name, err)

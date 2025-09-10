@@ -436,6 +436,23 @@ func revenueSummaryHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, results)
 }
 
+// getCatatanTotalHandler returns a single total (sum of amount) for the authenticated user.
+func getCatatanTotalHandler(c *gin.Context) {
+	user, ok := getUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		return
+	}
+	// Sum with a single query
+	type Row struct{ Total int64 }
+	var row Row
+	if err := db.Raw("SELECT COALESCE(SUM(amount),0) AS total FROM catatan_keuangans WHERE user_id = ?", user.ID).Scan(&row).Error; err != nil {
+		writeError(c, http.StatusInternalServerError, "query_failed", "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"total": row.Total})
+}
+
 // -------------------- uploads (atomic DB-first) --------------------
 
 func uploadFileHandler(c *gin.Context) {
@@ -647,6 +664,7 @@ func setupRoutes(r *gin.Engine) {
 	auth.GET("/profile", getProfileHandler)
 	auth.POST("/catatan", createCatatanHandler)
 	auth.GET("/catatan", listCatatanHandler)
+	auth.GET("/catatan/total", getCatatanTotalHandler)
 	auth.GET("/catatan/revenue", revenueSummaryHandler)
 	auth.POST("/uploads", uploadFileHandler)
 	auth.GET("/uploads", listUploadsHandler)

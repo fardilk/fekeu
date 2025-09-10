@@ -14,6 +14,7 @@ nohup: ignoring input
 [GIN-debug] GET    /profile                  --> main.getProfileHandler (5 handlers)
 [GIN-debug] POST   /catatan                  --> main.createCatatanHandler (5 handlers)
 [GIN-debug] GET    /catatan                  --> main.listCatatanHandler (5 handlers)
+[GIN-debug] GET    /catatan/total            --> main.getCatatanTotalHandler (5 handlers)
 [GIN-debug] GET    /catatan/revenue          --> main.revenueSummaryHandler (5 handlers)
 [GIN-debug] POST   /uploads                  --> main.uploadFileHandler (5 handlers)
 [GIN-debug] GET    /uploads                  --> main.listUploadsHandler (5 handlers)
@@ -21,113 +22,32 @@ nohup: ignoring input
 [GIN-debug] [WARNING] You trusted all proxies, this is NOT safe. We recommend you to set a value.
 Please check https://pkg.go.dev/github.com/gin-gonic/gin#readme-don-t-trust-all-proxies for details.
 [GIN-debug] Listening and serving HTTP on :8081
-2025/09/04 08:34:15 started watcher process pid=19335, logging to logs/watcher.log
-[GIN] 2025/09/04 - 08:52:43 | 204 |       9.378µs |       127.0.0.1 | OPTIONS  "/login"
-[GIN] 2025/09/04 - 08:52:43 | 200 |  163.774151ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 08:59:56 | 204 |       6.653µs |       127.0.0.1 | OPTIONS  "/uploads"
-[GIN] 2025/09/04 - 08:59:56 | 401 |     134.407µs |       127.0.0.1 | POST     "/uploads"
-[GIN] 2025/09/04 - 09:29:59 | 204 |      10.981µs |       127.0.0.1 | OPTIONS  "/uploads"
-
-2025/09/04 09:29:59 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/handlers.go:471 [35;1mrecord not found
-[0m[33m[1.090ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE profile_id = 9 AND file_name = 'anak2.jpeg' ORDER BY "uploads"."id" LIMIT 1
-[GIN] 2025/09/04 - 09:30:00 | 400 |  1.014033029s |       127.0.0.1 | POST     "/uploads"
-
-2025/09/04 09:30:00 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/handlers.go:471 [35;1mrecord not found
-[0m[33m[0.561ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE profile_id = 9 AND file_name = 'anak23.jpeg' ORDER BY "uploads"."id" LIMIT 1
-[GIN] 2025/09/04 - 09:30:01 | 400 |  1.029652525s |       127.0.0.1 | POST     "/uploads"
-
-2025/09/04 09:32:06 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/handlers.go:471 [35;1mrecord not found
-[0m[33m[0.606ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE profile_id = 9 AND file_name = 'WhatsApp Image 2025-09-03 at 11.00.08 AM.jpeg' ORDER BY "uploads"."id" LIMIT 1
-[GIN] 2025/09/04 - 09:32:07 | 400 |  1.041880922s |       127.0.0.1 | POST     "/uploads"
-
-2025/09/04 09:33:40 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/handlers.go:471 [35;1mrecord not found
-[0m[33m[0.286ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE profile_id = 9 AND file_name = 'WhatsApp Image 2025-09-03 at 10.45.05 AM.jpeg' ORDER BY "uploads"."id" LIMIT 1
-
-2025/09/04 09:33:40 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/handlers.go:547 [35;1mrecord not found
-[0m[33m[0.598ms] [34;1m[rows:0][0m SELECT * FROM "catatan_keuangans" WHERE user_id = 11 AND file_name = 'WhatsApp Image 2025-09-03 at 10.45.05 AM.jpeg' ORDER BY "catatan_keuangans"."id" LIMIT 1
-[GIN] 2025/09/04 - 09:33:40 | 200 |  252.377451ms |       127.0.0.1 | POST     "/uploads"
-
-2025/09/04 09:55:24 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/auth.go:53 [35;1mrecord not found
-[0m[33m[1.388ms] [34;1m[rows:0][0m SELECT * FROM "users" WHERE username = 'testuser01' ORDER BY "users"."id" LIMIT 1
-[GIN] 2025/09/04 - 09:55:24 | 401 |    1.850554ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 09:55:24 | 204 |      23.026µs |       127.0.0.1 | OPTIONS  "/refresh"
-[GIN] 2025/09/04 - 09:55:24 | 200 |    9.792168ms |       127.0.0.1 | POST     "/refresh"
-
-2025/09/04 09:55:24 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/auth.go:53 [35;1mrecord not found
-[0m[33m[0.553ms] [34;1m[rows:0][0m SELECT * FROM "users" WHERE username = 'testuser01' ORDER BY "users"."id" LIMIT 1
-[GIN] 2025/09/04 - 09:55:24 | 401 |     866.079µs |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 09:55:32 | 200 |   159.12661ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:05:10 | 401 |  153.196012ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:05:10 | 200 |    8.382004ms |       127.0.0.1 | POST     "/refresh"
-[GIN] 2025/09/04 - 10:05:10 | 401 |  154.897992ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:05:12 | 200 |  158.694199ms |       127.0.0.1 | POST     "/login"
-
-2025/09/04 10:05:16 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/auth.go:53 [35;1mrecord not found
-[0m[33m[1.123ms] [34;1m[rows:0][0m SELECT * FROM "users" WHERE username = 'testuser01' ORDER BY "users"."id" LIMIT 1
-[GIN] 2025/09/04 - 10:05:16 | 401 |    1.547223ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:05:16 | 200 |    5.769658ms |       127.0.0.1 | POST     "/refresh"
-
-2025/09/04 10:05:16 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/auth.go:53 [35;1mrecord not found
-[0m[33m[0.579ms] [34;1m[rows:0][0m SELECT * FROM "users" WHERE username = 'testuser01' ORDER BY "users"."id" LIMIT 1
-[GIN] 2025/09/04 - 10:05:16 | 401 |     782.108µs |       127.0.0.1 | POST     "/login"
-
-2025/09/04 10:05:20 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/auth.go:53 [35;1mrecord not found
-[0m[33m[1.121ms] [34;1m[rows:0][0m SELECT * FROM "users" WHERE username = 'testuser01' ORDER BY "users"."id" LIMIT 1
-[GIN] 2025/09/04 - 10:05:20 | 401 |    1.401984ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:05:20 | 200 |    6.671954ms |       127.0.0.1 | POST     "/refresh"
-
-2025/09/04 10:05:20 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/auth.go:53 [35;1mrecord not found
-[0m[33m[0.559ms] [34;1m[rows:0][0m SELECT * FROM "users" WHERE username = 'testuser01' ORDER BY "users"."id" LIMIT 1
-[GIN] 2025/09/04 - 10:05:20 | 401 |     821.673µs |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:05:25 | 200 |  159.802872ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:05:38 | 200 |  157.864065ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:08:55 | 200 |   163.91013ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:09:36 | 200 |  159.385787ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:13:52 | 200 |  159.242199ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:13:59 | 200 |  159.478745ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:20:36 | 200 |  159.254707ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:23:40 | 200 |  159.755001ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:23:48 | 200 |  156.181867ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:38:25 | 200 |  159.265134ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:45:40 | 200 |   61.765972ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:45:40 | 200 |    4.487046ms |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:45:40 | 200 |    4.155724ms |       127.0.0.1 | GET      "/catatan/revenue"
-[GIN] 2025/09/04 - 10:47:03 | 200 |   59.727377ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 10:47:03 | 200 |     896.261µs |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:47:03 | 200 |     590.127µs |       127.0.0.1 | GET      "/catatan/revenue"
-[GIN] 2025/09/04 - 10:51:02 | 204 |     211.206µs |       127.0.0.1 | OPTIONS  "/catatan"
-[GIN] 2025/09/04 - 10:51:02 | 204 |     236.153µs |       127.0.0.1 | OPTIONS  "/catatan"
-[GIN] 2025/09/04 - 10:51:02 | 200 |    4.284277ms |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:51:02 | 200 |   10.081301ms |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:52:05 | 200 |     743.885µs |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:54:10 | 204 |       8.296µs |       127.0.0.1 | OPTIONS  "/uploads"
-[GIN] 2025/09/04 - 10:54:10 | 401 |     240.181µs |       127.0.0.1 | POST     "/uploads"
-[GIN] 2025/09/04 - 10:54:48 | 204 |       7.043µs |       127.0.0.1 | OPTIONS  "/uploads"
-[GIN] 2025/09/04 - 10:54:48 | 401 |      50.174µs |       127.0.0.1 | POST     "/uploads"
-[GIN] 2025/09/04 - 10:54:55 | 200 |     782.558µs |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:54:55 | 200 |      548.99µs |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:55:06 | 200 |     594.134µs |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:55:06 | 200 |     598.503µs |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 10:56:16 | 204 |       7.504µs |       127.0.0.1 | OPTIONS  "/uploads"
-[GIN] 2025/09/04 - 10:56:16 | 401 |      44.633µs |       127.0.0.1 | POST     "/uploads"
-[GIN] 2025/09/04 - 10:57:15 | 204 |        5.71µs |       127.0.0.1 | OPTIONS  "/uploads"
-[GIN] 2025/09/04 - 10:57:15 | 401 |      37.651µs |       127.0.0.1 | POST     "/uploads"
-[GIN] 2025/09/04 - 11:02:43 | 204 |         5.1µs |       127.0.0.1 | OPTIONS  "/uploads"
-[GIN] 2025/09/04 - 11:02:43 | 401 |       58.32µs |       127.0.0.1 | POST     "/uploads"
-[GIN] 2025/09/04 - 11:02:56 | 200 |     687.861µs |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 11:02:56 | 200 |     688.402µs |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 11:03:56 | 204 |       4.971µs |       127.0.0.1 | OPTIONS  "/uploads"
-[GIN] 2025/09/04 - 11:03:56 | 401 |      47.912µs |       127.0.0.1 | POST     "/uploads"
-[GIN] 2025/09/04 - 11:04:15 | 200 |  170.555656ms |       127.0.0.1 | POST     "/login"
-[GIN] 2025/09/04 - 11:04:15 | 200 |      1.5891ms |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 11:04:15 | 200 |    1.259737ms |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 11:04:37 | 200 |    8.779499ms |       127.0.0.1 | POST     "/uploads"
-[GIN] 2025/09/04 - 11:04:49 | 200 |    1.482908ms |       127.0.0.1 | GET      "/catatan"
-[GIN] 2025/09/04 - 11:04:49 | 200 |    2.118114ms |       127.0.0.1 | GET      "/catatan"
-
-2025/09/04 11:05:37 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/handlers.go:471 [35;1mrecord not found
-[0m[33m[5.727ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE profile_id = 9 AND file_name = 'roy.jpeg' ORDER BY "uploads"."id" LIMIT 1
-
-2025/09/04 11:05:38 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/handlers.go:547 [35;1mrecord not found
-[0m[33m[1.035ms] [34;1m[rows:0][0m SELECT * FROM "catatan_keuangans" WHERE user_id = 11 AND file_name = 'roy.jpeg' ORDER BY "catatan_keuangans"."id" LIMIT 1
-[GIN] 2025/09/04 - 11:05:38 | 200 |  681.692984ms |       127.0.0.1 | POST     "/uploads"
+2025/09/10 08:23:11 started watcher process pid=14648, logging to logs/watcher.log
+[GIN] 2025/09/10 - 08:23:17 | 204 |       8.888µs |       127.0.0.1 | OPTIONS  "/login"
+[GIN] 2025/09/10 - 08:23:17 | 200 |  166.298395ms |       127.0.0.1 | POST     "/login"
+[GIN] 2025/09/10 - 08:23:17 | 204 |       7.655µs |       127.0.0.1 | OPTIONS  "/catatan"
+[GIN] 2025/09/10 - 08:23:17 | 204 |        4.66µs |       127.0.0.1 | OPTIONS  "/catatan"
+[GIN] 2025/09/10 - 08:23:17 | 204 |       10.07µs |       127.0.0.1 | OPTIONS  "/catatan"
+[GIN] 2025/09/10 - 08:23:17 | 200 |    3.170302ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:23:17 | 200 |    1.209229ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:23:17 | 200 |   14.580817ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:28:23 | 200 |    1.436511ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:29:18 | 204 |       11.16µs |       127.0.0.1 | OPTIONS  "/uploads"
+[GIN] 2025/09/10 - 08:29:18 | 401 |     103.323µs |       127.0.0.1 | POST     "/uploads"
+[GIN] 2025/09/10 - 08:29:42 | 200 |    2.224644ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:29:42 | 200 |    1.296117ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:29:42 | 200 |    1.513568ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:29:48 | 204 |       6.852µs |       127.0.0.1 | OPTIONS  "/uploads"
+[GIN] 2025/09/10 - 08:29:48 | 401 |      54.097µs |       127.0.0.1 | POST     "/uploads"
+[GIN] 2025/09/10 - 08:29:58 | 200 |    1.947321ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:31:54 | 200 |    1.762272ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:32:10 | 204 |        5.48µs |       127.0.0.1 | OPTIONS  "/uploads"
+[GIN] 2025/09/10 - 08:32:10 | 401 |      61.445µs |       127.0.0.1 | POST     "/uploads"
+[GIN] 2025/09/10 - 08:32:25 | 200 |    1.845451ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:35:46 | 200 |    1.558554ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:36:02 | 204 |       8.407µs |       127.0.0.1 | OPTIONS  "/uploads"
+[GIN] 2025/09/10 - 08:36:02 | 401 |       64.96µs |       127.0.0.1 | POST     "/uploads"
+[GIN] 2025/09/10 - 08:36:20 | 200 |    1.206031ms |       127.0.0.1 | GET      "/catatan"
+[GIN] 2025/09/10 - 08:36:39 | 204 |       6.653µs |       127.0.0.1 | OPTIONS  "/uploads"
+[GIN] 2025/09/10 - 08:36:39 | 401 |      77.355µs |       127.0.0.1 | POST     "/uploads"
+[GIN] 2025/09/10 - 08:36:53 | 200 |    1.978226ms |       127.0.0.1 | GET      "/catatan"
