@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 
 	"be03/models"
 
@@ -23,9 +24,19 @@ func initDB() {
 	if err != nil {
 		log.Fatal("failed to connect postgres database:", err)
 	}
+	// Control schema migrations with env DB_AUTO_MIGRATE (default true). Any permission errors will be logged and ignored.
+	shouldMigrate := true
+	if v := os.Getenv("DB_AUTO_MIGRATE"); v != "" {
+		lv := strings.ToLower(v)
+		if lv == "false" || lv == "0" || lv == "no" {
+			shouldMigrate = false
+		}
+	}
 	// Ensure the roles master table exists first and seed it so users FK can be applied safely.
-	if err := db.AutoMigrate(&models.Role{}); err != nil {
-		log.Fatal("migration failed (roles):", err)
+	if shouldMigrate {
+		if err := db.AutoMigrate(&models.Role{}); err != nil {
+			log.Printf("migration warning (roles): %v", err)
+		}
 	}
 	// seed master roles immediately
 	roles := []models.Role{{Name: "administrator", Description: "full access"}, {Name: "user", Description: "regular user"}}
@@ -38,13 +49,30 @@ func initDB() {
 	}
 
 	// Now migrate the rest (users will get FK to roles)
-	if err := db.AutoMigrate(&models.User{}, &models.CatatanKeuangan{}, &models.Profile{}, &models.Upload{}, &models.RefreshToken{}); err != nil {
-		log.Fatal("migration failed:", err)
+	if shouldMigrate {
+		// Migrate models individually so a failure on one doesn't block others
+		if err := db.AutoMigrate(&models.User{}); err != nil {
+			log.Printf("migration warning (users): %v", err)
+		}
+		if err := db.AutoMigrate(&models.CatatanKeuangan{}); err != nil {
+			log.Printf("migration warning (catatan_keuangans): %v", err)
+		}
+		if err := db.AutoMigrate(&models.Profile{}); err != nil {
+			log.Printf("migration warning (profiles): %v", err)
+		}
+		if err := db.AutoMigrate(&models.Upload{}); err != nil {
+			log.Printf("migration warning (uploads): %v", err)
+		}
+		if err := db.AutoMigrate(&models.RefreshToken{}); err != nil {
+			log.Printf("migration warning (refresh_tokens): %v", err)
+		}
 	}
 
 	// Ensure uploads -> profiles FK exists (in case table existed before adding ProfileID)
-	if err := ensureUploadProfileFK(); err != nil {
-		log.Printf("warning: ensuring uploads->profiles FK failed: %v", err)
+	if shouldMigrate {
+		if err := ensureUploadProfileFK(); err != nil {
+			log.Printf("warning: ensuring uploads->profiles FK failed: %v", err)
+		}
 	}
 	seedDB()
 }

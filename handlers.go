@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -37,6 +38,9 @@ func writeError(c *gin.Context, status int, code, msg string, extra gin.H) {
 	}
 	for k, v := range extra {
 		body[k] = v
+	}
+	if status >= 500 {
+		log.Printf("HTTP %d error code=%s msg=%s path=%s", status, code, msg, c.FullPath())
 	}
 	c.AbortWithStatusJSON(status, body)
 }
@@ -152,6 +156,7 @@ func storeRefreshToken(u models.User, raw string, ttl time.Duration) (*models.Re
 	h := sha256.Sum256([]byte(raw))
 	rt := &models.RefreshToken{UserID: u.ID, TokenHash: hex.EncodeToString(h[:]), ExpiresAt: time.Now().Add(ttl)}
 	if err := db.Create(rt).Error; err != nil {
+		log.Printf("storeRefreshToken failed for user=%s id=%d: %v", u.Username, u.ID, err)
 		return nil, err
 	}
 	return rt, nil
@@ -185,7 +190,10 @@ func randomHex(n int) string { b := make([]byte, n); _, _ = rand.Read(b); return
 
 // register/login/refresh/revoke/me handlers
 func registerHandler(c *gin.Context) {
-	var req struct{ Username, Password string }
+	var req struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Username) == "" || len(req.Password) < 6 {
 		writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
 		return
@@ -213,10 +221,28 @@ func registerHandler(c *gin.Context) {
 }
 
 func loginHandler(c *gin.Context) {
-	var req struct{ Username, Password string }
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
-		return
+	var req struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
+	// read raw body to aid debugging of bind issues (we'll restore it for the decoder)
+	raw, _ := c.GetRawData()
+	// restore body for subsequent binding
+	c.Request.Body = io.NopCloser(bytes.NewReader(raw))
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Username) == "" || req.Password == "" {
+		// Fallback: accept form-encoded credentials as well
+		if u := strings.TrimSpace(c.PostForm("username")); u != "" {
+			p := c.PostForm("password")
+			if p != "" {
+				req.Username, req.Password = u, p
+			}
+		}
+		if req.Username == "" || req.Password == "" {
+			// log headers, content length and raw body to help diagnose malformed/missing JSON from clients
+			log.Printf("login: bind error=%v headers=%v content_length=%d raw=%q", err, c.Request.Header, c.Request.ContentLength, string(raw))
+			writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
+			return
+		}
 	}
 	var user models.User
 	if err := db.Where("username = ?", req.Username).First(&user).Error; err != nil {
@@ -236,12 +262,15 @@ func loginHandler(c *gin.Context) {
 	}
 	at, err := generateAccessToken(user, roleName, 15*time.Minute)
 	if err != nil {
+		log.Printf("generateAccessToken failed: %v", err)
 		writeError(c, http.StatusInternalServerError, "token_failed", "", nil)
 		return
 	}
 	rawRT := randomHex(32)
 	if _, err := storeRefreshToken(user, rawRT, 7*24*time.Hour); err != nil {
-		writeError(c, http.StatusInternalServerError, "token_failed", "", nil)
+		// Non-fatal: return access token so FE can proceed. Include empty refresh token to keep response shape stable.
+		log.Printf("login: refresh token store failed (non-fatal): %v", err)
+		c.JSON(http.StatusOK, gin.H{"access_token": at, "refresh_token": "", "token_type": "bearer", "expires_in": 900})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"access_token": at, "refresh_token": rawRT, "token_type": "bearer", "expires_in": 900})
@@ -466,8 +495,9 @@ func uploadFileHandler(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "profile_missing", "profile missing", nil)
 		return
 	}
-	folder := c.PostForm("folder")
-	if folder == "" {
+	// Force uploads into the folder watched by the watcher: public/keu
+	folder := strings.ToLower(strings.TrimSpace(c.PostForm("folder")))
+	if folder != "keu" { // normalize any value to the single supported folder
 		folder = "keu"
 	}
 	file, err := c.FormFile("file")
@@ -475,6 +505,8 @@ func uploadFileHandler(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "missing_file", "file missing", nil)
 		return
 	}
+	// sanitize filename to prevent directory traversal or weird paths
+	cleanName := filepath.Base(file.Filename)
 	src, err := file.Open()
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "open_failed", "", nil)
@@ -493,18 +525,35 @@ func uploadFileHandler(c *gin.Context) {
 		return
 	}
 	baseDir := "public"
-	relPath := folder + "/" + file.Filename
+	relPath := folder + "/" + cleanName
 	fullPath := filepath.Join(baseDir, relPath)
 	storePath := filepath.ToSlash(filepath.Join("public", relPath))
-	// duplicate check
-	var existingUp models.Upload
-	if err := db.Where("profile_id = ? AND file_name = ?", profile.ID, file.Filename).First(&existingUp).Error; err == nil {
-		c.JSON(http.StatusOK, gin.H{"id": existingUp.ID, "path": relPath, "store_path": existingUp.StorePath, "catatan_id": existingUp.KeuanganID})
-		return
-	}
-	// optional manual linkage
+	// optional manual linkage (declared early as it may be used in creation branch)
 	var keuID *uint
 	var catatanID *uint
+	// duplicate check with reprocess support
+	var up models.Upload
+	var reprocess bool
+	if err := db.Where("profile_id = ? AND file_name = ?", profile.ID, cleanName).First(&up).Error; err == nil {
+		// Reuse existing record to allow re-uploads (e.g., previous OCR failed)
+		reprocess = true
+		up.StorePath = storePath
+		up.ContentType = mime
+		// reset failure state; will update after OCR
+		up.Failed = false
+		up.FailedReason = ""
+		if keuID != nil {
+			up.KeuanganID = keuID
+		}
+		_ = db.Save(&up).Error
+	} else {
+		up = models.Upload{ProfileID: profile.ID, FileName: cleanName, StorePath: storePath, KeuanganID: keuID, ContentType: mime}
+		if err := db.Create(&up).Error; err != nil {
+			writeError(c, http.StatusInternalServerError, "db_save_failed", "", nil)
+			return
+		}
+	}
+	// optional manual linkage
 	if v := c.PostForm("keuangan_id"); v != "" {
 		if parsed, _ := strconv.ParseUint(v, 10, 64); parsed != 0 {
 			pv := uint(parsed)
@@ -514,12 +563,12 @@ func uploadFileHandler(c *gin.Context) {
 	if amtStr := c.PostForm("amount"); amtStr != "" {
 		if amtVal, err := strconv.ParseInt(amtStr, 10, 64); err == nil && amtVal > 0 {
 			var existing models.CatatanKeuangan
-			if err := db.Where("user_id = ? AND file_name = ?", user.ID, file.Filename).First(&existing).Error; err == nil {
+			if err := db.Where("user_id = ? AND file_name = ?", user.ID, cleanName).First(&existing).Error; err == nil {
 				keuID = &existing.ID
 				cid := existing.ID
 				catatanID = &cid
 			} else {
-				ck := models.CatatanKeuangan{UserID: user.ID, FileName: file.Filename, Amount: amtVal, Date: time.Now()}
+				ck := models.CatatanKeuangan{UserID: user.ID, FileName: cleanName, Amount: amtVal, Date: time.Now()}
 				if err := db.Create(&ck).Error; err == nil {
 					cid := ck.ID
 					catatanID = &cid
@@ -528,76 +577,69 @@ func uploadFileHandler(c *gin.Context) {
 			}
 		}
 	}
-	up := models.Upload{ProfileID: profile.ID, FileName: file.Filename, StorePath: storePath, KeuanganID: keuID, ContentType: mime}
-	if err := db.Create(&up).Error; err != nil {
-		writeError(c, http.StatusInternalServerError, "db_save_failed", "", nil)
-		return
-	}
 	stagingDir := filepath.Join(baseDir, ".staging")
 	if err := os.MkdirAll(stagingDir, 0755); err != nil {
-		db.Delete(&up)
+		if !reprocess {
+			db.Delete(&up)
+		}
 		writeError(c, http.StatusInternalServerError, "mkdir_failed", "", nil)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		db.Delete(&up)
+		if !reprocess {
+			db.Delete(&up)
+		}
 		writeError(c, http.StatusInternalServerError, "mkdir_failed", "", nil)
 		return
 	}
 	tmpName := filepath.Join(stagingDir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), file.Filename))
 	if err := os.WriteFile(tmpName, firstBytes, 0644); err != nil {
-		db.Delete(&up)
+		if !reprocess {
+			db.Delete(&up)
+		}
 		writeError(c, http.StatusInternalServerError, "save_failed", "", nil)
 		return
 	}
 	if err := os.Rename(tmpName, fullPath); err != nil {
-		db.Delete(&up)
+		if !reprocess {
+			db.Delete(&up)
+		}
 		_ = os.Remove(tmpName)
 		writeError(c, http.StatusInternalServerError, "save_failed", "", nil)
 		return
 	}
-	matches, isLikelyNonAmount, err := ocr.FindAllMatches(fullPath)
+	log.Printf("OCR: starting on %s for user=%d file=%s", fullPath, profile.UserID, cleanName)
+	amt, _, raw, err := ocr.ExtractAmountFromImage(fullPath)
 	if err != nil {
+		log.Printf("OCR: error on %s: %v", fullPath, err)
 		writeError(c, http.StatusInternalServerError, "ocr_error", "", nil)
 		return
 	}
-	if len(matches) == 0 {
+	log.Printf("OCR: result amount=%d raw=%q for %s", amt, raw, fullPath)
+	if amt <= 0 {
 		up.Failed = true
-		if isLikelyNonAmount {
-			up.FailedReason = "File tidak dikenali, gunakan file lain!"
-			db.Save(&up)
-			_ = os.Remove(fullPath)
-			writeError(c, http.StatusBadRequest, "unsupported_type", "File tidak dikenali, gunakan file lain!", gin.H{"allowed": []string{"image/jpeg", "image/png"}})
-			return
-		}
 		up.FailedReason = "Nominal tidak ditemukan, gunakan file lain"
 		db.Save(&up)
 		_ = os.Remove(fullPath)
 		writeError(c, http.StatusBadRequest, "amount_not_found", "Nominal tidak ditemukan, gunakan file lain", nil)
 		return
 	}
-	if len(matches) > 1 {
-		up.Failed = true
-		up.FailedReason = "Gagal! Gunakan file lain"
-		db.Save(&up)
-		_ = os.Remove(fullPath)
-		writeError(c, http.StatusBadRequest, "ambiguous_amount", "Gagal! Gunakan file lain", nil)
-		return
-	}
-	if amt, err := ocr.ParseAmountFromMatch(matches[0]); err == nil && amt > 0 {
-		lf := strings.TrimSpace(matches[0])
-		if (strings.Contains(lf, ".") || strings.HasSuffix(lf, ",00") || strings.HasSuffix(lf, ".00")) && amt%100 == 0 {
-			amt /= 100
-		}
+	if amt > 0 {
 		var existingCat models.CatatanKeuangan
 		if err := db.Where("user_id = ? AND file_name = ?", profile.UserID, up.FileName).First(&existingCat).Error; err == nil {
 			up.KeuanganID = &existingCat.ID
 			db.Save(&up)
 		} else {
-			ct := models.CatatanKeuangan{UserID: profile.UserID, FileName: up.FileName, Amount: amt, Date: time.Now()}
-			if err := db.Create(&ct).Error; err == nil {
-				up.KeuanganID = &ct.ID
-				db.Save(&up)
+			// Never create catatan for admin (user_id=1)
+			if profile.UserID != 1 {
+				ct := models.CatatanKeuangan{UserID: profile.UserID, FileName: up.FileName, Amount: amt, Date: time.Now()}
+				if err := db.Create(&ct).Error; err == nil {
+					up.KeuanganID = &ct.ID
+					db.Save(&up)
+					log.Printf("OCR: created catatan id=%d amount=%d for user=%d file=%s", ct.ID, amt, profile.UserID, up.FileName)
+				} else {
+					log.Printf("OCR: failed to create catatan for user=%d file=%s: %v", profile.UserID, up.FileName, err)
+				}
 			}
 		}
 	}
@@ -651,8 +693,14 @@ func getUploadHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, up)
 }
 
+// -------------------- health --------------------
+func healthHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
 // -------------------- routes wiring --------------------
 func setupRoutes(r *gin.Engine) {
+	r.GET("/health", healthHandler)
 	r.POST("/register", registerHandler)
 	r.POST("/login", loginHandler)
 	r.POST("/refresh", refreshHandler)
