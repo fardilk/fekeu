@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for building the be03 Go app and publishing to GHCR
 # Usage in GH Actions: build the image and push to ghcr.io/${{ github.repository_owner }}/fekeu:tag
 
-ARG GO_VERSION=1.20
+ARG GO_VERSION=1.24
 FROM golang:${GO_VERSION}-bullseye AS builder
 WORKDIR /src
 
