@@ -15,9 +15,6 @@ services:
   app:
     image: ghcr.io/fardilk/fekeu:latest
     container_name: snapcash-be
-    build:
-      context: .
-      target: runtime
     depends_on:
       - db
     environment:
@@ -40,9 +37,6 @@ services:
   watcher:
     image: ghcr.io/fardilk/fekeu:ocr
     container_name: snapcash-watcher
-    build:
-      context: .
-      target: watcher
     depends_on:
       - db
     environment:
