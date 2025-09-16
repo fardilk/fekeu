@@ -45,10 +45,7 @@ services:
       - db
     environment:
       DB_DSN: postgres://postgres:postgres@snapcash-postgres:5432/cat_keu?sslmode=disable
-      WATCHER_PORT: "9090"
-    command: ["-dir", "public/keu", "-watch", "-port", "9090"]
-    ports:
-      - "9090:9090"
+    command: ["-dir", "public/keu", "-watch"]
     networks:
       - snapcash-net
 

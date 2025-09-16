@@ -57,6 +57,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr l
         rm -rf /var/lib/apt/lists/*
 
 COPY --from=watcher-builder /out/be03_watcher /usr/local/bin/be03_watcher
-ENV WATCHER_PORT=9090
-EXPOSE 9090
 ENTRYPOINT ["/usr/local/bin/be03_watcher"]
