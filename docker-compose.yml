@@ -1,0 +1,59 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    container_name: snapcash-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cat_keu
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    image: ghcr.io/fardilk/fekeu:latest
+    container_name: snapcash-be
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      - db
+    environment:
+      DB_DSN: postgres://postgres:postgres@snapcash-postgres:5432/cat_keu?sslmode=disable
+      DB_HOST: snapcash-postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: cat_keu
+      JWT_SECRET: devsecret
+      SERVER_PORT: "8081"
+      APP_ENV: dev
+      LOG_LEVEL: debug
+      ALLOW_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+    ports:
+      - "8081:8081"
+    networks:
+      - snapcash-net
+
+  watcher:
+    image: ghcr.io/fardilk/fekeu:ocr
+    container_name: snapcash-watcher
+    build:
+      context: .
+      target: watcher
+    depends_on:
+      - db
+    environment:
+      DB_DSN: postgres://postgres:postgres@snapcash-postgres:5432/cat_keu?sslmode=disable
+      WATCHER_PORT: "9090"
+    command: ["-dir", "public/keu", "-watch", "-port", "9090"]
+    ports:
+      - "9090:9090"
+    networks:
+      - snapcash-net
+
+networks:
+  snapcash-net:
+
+volumes:
+  pgdata:
