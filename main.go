@@ -47,7 +47,15 @@ func main() {
 	// Start file watcher in background so `go run .` also runs the watcher.
 	go startWatcherProcess()
 
-	r.Run(":8081")
+	// Listen on configured port (default 8080 to match FE expectations)
+	port := os.Getenv("PORT")
+	if strings.TrimSpace(port) == "" {
+		port = os.Getenv("SERVER_PORT")
+	}
+	if strings.TrimSpace(port) == "" {
+		port = "8080"
+	}
+	r.Run(":" + port)
 }
 
 // startWatcherProcess launches the existing process watcher as a child process
@@ -83,8 +91,25 @@ func corsMiddleware() gin.HandlerFunc {
 	// Read and parse allowed origins once (hot-reload not required for dev convenience)
 	raw := os.Getenv("ALLOWED_ORIGINS")
 	if strings.TrimSpace(raw) == "" {
+		// backward-compat for .env that used ALLOW_ORIGINS
+		raw = os.Getenv("ALLOW_ORIGINS")
+	}
+	if strings.TrimSpace(raw) == "" {
 		// include Vite default 5173 plus common React ports
-		raw = "http://localhost:5173,http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003"
+		raw = strings.Join([]string{
+			// localhost variants
+			"http://localhost:5173",
+			"http://localhost:3000",
+			"http://localhost:3001",
+			"http://localhost:3002",
+			"http://localhost:3003",
+			// 127.0.0.1 variants (common FE dev setups)
+			"http://127.0.0.1:5173",
+			"http://127.0.0.1:3000",
+			"http://127.0.0.1:3001",
+			"http://127.0.0.1:3002",
+			"http://127.0.0.1:3003",
+		}, ",")
 	}
 	parts := strings.Split(raw, ",")
 	allowed := make(map[string]struct{}, len(parts))

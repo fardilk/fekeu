@@ -1,7 +1,122 @@
-nohup: ignoring input
-2025/09/10 08:23:11 Preloaded: uploads=27 catatan=10
-2025/09/10 08:23:11 Scanning 3 files (workers=16)
-2025/09/10 08:23:11 Watching public/keu (debounced) ...
-2025/09/10 08:23:11 Preloaded: uploads=27 catatan=10
-2025/09/10 08:23:11 Scanning 3 files (workers=16)
-2025/09/10 08:23:11 Watching public/keu (debounced) ...
+nohup: missing operand
+Try 'nohup --help' for more information.
+2025/09/10 23:03:41 Preloaded: uploads=27 catatan=0
+2025/09/10 23:03:41 Scanning 0 files (workers=16)
+2025/09/10 23:03:41 Watching public/keu (debounced) ...
+2025/09/10 23:04:26 Preloaded: uploads=27 catatan=0
+2025/09/10 23:04:26 Scanning 0 files (workers=16)
+2025/09/10 23:04:26 Watching public/keu (debounced) ...
+2025/09/10 23:05:05 Preloaded: uploads=27 catatan=0
+2025/09/10 23:05:05 Scanning 0 files (workers=16)
+2025/09/10 23:05:05 Watching public/keu (debounced) ...
+2025/09/10 23:05:33 Preloaded: uploads=27 catatan=0
+2025/09/10 23:05:33 Scanning 0 files (workers=16)
+2025/09/10 23:05:33 Watching public/keu (debounced) ...
+2025/09/10 23:14:31 Preloaded: uploads=27 catatan=0
+2025/09/10 23:14:31 Scanning 0 files (workers=16)
+2025/09/10 23:14:31 Watching public/keu (debounced) ...
+2025/09/11 08:39:13 SKIP unknown owner for abcd.png: no upload owner resolved; not creating catatan
+2025/09/11 08:39:13 WARN failed to move processed file abcd.png: stat public/keu/abcd.png: no such file or directory
+
+2025/09/11 08:41:45 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[0.855ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/abc 3.png' OR file_name = 'abc 3.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/09/11 08:41:46 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[0.452ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/abc 3.png' OR file_name = 'abc 3.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/09/11 08:41:46 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[0.612ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/abc 3.png' OR file_name = 'abc 3.png' ORDER BY "uploads"."id" LIMIT 1
+2025/09/11 08:41:46 SKIP creating upload for admin profile (user_id=1) file=abc 3.png
+2025/09/11 09:01:26 Preloaded: uploads=27 catatan=0
+2025/09/11 09:01:26 Scanning 0 files (workers=16)
+2025/09/11 09:01:26 Watching public/keu (debounced) ...
+2025/09/11 09:02:18 Preloaded: uploads=27 catatan=0
+2025/09/11 09:02:18 Scanning 0 files (workers=16)
+2025/09/11 09:02:18 Watching public/keu (debounced) ...
+2025/09/11 09:03:29 Preloaded: uploads=27 catatan=0
+2025/09/11 09:03:29 Scanning 0 files (workers=16)
+2025/09/11 09:03:29 Watching public/keu (debounced) ...
+2025/09/11 09:36:17 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:36:17 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:36:17 WARN failed to move processed file abc 3.png: stat public/keu/abc 3.png: no such file or directory
+2025/09/11 09:36:17 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:36:17 WARN failed to move processed file abc 3.png: stat public/keu/abc 3.png: no such file or directory
+2025/09/11 09:36:17 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:36:17 WARN failed to move processed file abc 3.png: stat public/keu/abc 3.png: no such file or directory
+2025/09/11 09:52:22 Preloaded: uploads=27 catatan=0
+2025/09/11 09:52:22 Scanning 1 files (workers=16)
+2025/09/11 09:52:22 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:52:22 Watching public/keu (debounced) ...
+2025/09/11 09:52:22 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:52:22 WARN failed to move processed file abc 3.png: stat public/keu/abc 3.png: no such file or directory
+2025/09/11 09:52:22 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:52:22 WARN failed to move processed file abc 3.png: stat public/keu/abc 3.png: no such file or directory
+2025/09/11 09:52:22 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:52:22 WARN failed to move processed file abc 3.png: stat public/keu/abc 3.png: no such file or directory
+2025/09/11 09:52:22 SKIP unknown owner for abc 3.png: no upload owner resolved; not creating catatan
+2025/09/11 09:52:22 WARN failed to move processed file abc 3.png: stat public/keu/abc 3.png: no such file or directory
+2025/09/11 14:51:09 SKIP unknown owner for 3829.png: no upload owner resolved; not creating catatan
+2025/09/11 14:51:09 SKIP unknown owner for 3829.png: no upload owner resolved; not creating catatan
+2025/09/11 14:51:09 WARN failed to move processed file 3829.png: stat public/keu/3829.png: no such file or directory
+2025/09/11 14:51:09 SKIP unknown owner for 3829.png: no upload owner resolved; not creating catatan
+2025/09/11 14:51:09 WARN failed to move processed file 3829.png: stat public/keu/3829.png: no such file or directory
+2025/09/11 14:51:09 SKIP unknown owner for 3829.png: no upload owner resolved; not creating catatan
+2025/09/11 14:51:09 WARN failed to move processed file 3829.png: stat public/keu/3829.png: no such file or directory
+2025/09/11 14:51:09 SKIP unknown owner for 3829.png: no upload owner resolved; not creating catatan
+2025/09/11 14:51:09 WARN failed to move processed file 3829.png: stat public/keu/3829.png: no such file or directory
+2025/09/11 18:42:56 Preloaded: uploads=27 catatan=0
+2025/09/11 18:42:56 Scanning 0 files (workers=16)
+2025/09/11 18:42:56 Watching public/keu (debounced) ...
+2025/09/11 20:13:33 SKIP unknown owner for 483.jpeg: no upload owner resolved; not creating catatan
+2025/09/11 20:13:33 SKIP unknown owner for 333.png: no upload owner resolved; not creating catatan
+2025/09/11 20:16:40 NO AMOUNT found for WhatsApp Image 2025-09-11 at 8.15.33 PM.jpeg: marking upload failed and moving file to failed
+
+2025/09/11 20:20:10 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[1.183ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/82349.png' OR file_name = '82349.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/09/11 20:20:10 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[0.461ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/82349.png' OR file_name = '82349.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/09/11 20:20:10 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[0.410ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/82349.png' OR file_name = '82349.png' ORDER BY "uploads"."id" LIMIT 1
+2025/09/11 20:20:10 SKIP creating upload for admin profile (user_id=1) file=82349.png
+
+2025/09/11 20:21:35 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[1.255ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/sample.jpeg' OR file_name = 'sample.jpeg' ORDER BY "uploads"."id" LIMIT 1
+
+2025/09/11 20:21:35 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[0.637ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/sample.jpeg' OR file_name = 'sample.jpeg' ORDER BY "uploads"."id" LIMIT 1
+
+2025/09/11 20:21:36 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:417 [35;1mrecord not found
+[0m[33m[0.596ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/sample.jpeg' OR file_name = 'sample.jpeg' ORDER BY "uploads"."id" LIMIT 1
+2025/09/11 20:21:36 SKIP creating upload for admin profile (user_id=1) file=sample.jpeg
+2025/09/11 20:22:26 SKIP unknown owner for sample.jpeg: no upload owner resolved; not creating catatan
+2025/09/12 08:22:05 Preloaded: uploads=27 catatan=0
+2025/09/12 08:22:05 Scanning 3 files (workers=16)
+2025/09/12 08:22:05 Watching public/keu (debounced) ...
+2025/09/12 13:15:33 Preloaded: uploads=27 catatan=0
+2025/09/12 13:15:33 Scanning 3 files (workers=16)
+2025/09/12 13:15:33 Watching public/keu (debounced) ...
+2025/09/12 13:17:15 SKIP unknown owner for 400ribu.jpeg: no upload owner resolved; not creating catatan
+2025/09/12 13:39:11 SKIP unknown owner for 400ribu.jpeg: no upload owner resolved; not creating catatan
+2025/09/12 13:40:05 Preloaded: uploads=27 catatan=0
+2025/09/12 13:40:05 Scanning 3 files (workers=16)
+2025/09/12 13:40:05 Watching public/keu (debounced) ...
+2025/09/12 13:48:42 SKIP unknown owner for 400ribu.jpeg: no upload owner resolved; not creating catatan
+2025/09/12 14:14:40 SKIP unknown owner for 34e0ribu.jpeg: no upload owner resolved; not creating catatan
+2025/09/12 14:14:40 SKIP unknown owner for 34e0ribu.jpeg: no upload owner resolved; not creating catatan
+2025/09/12 14:14:40 WARN failed to move processed file 34e0ribu.jpeg: stat public/keu/34e0ribu.jpeg: no such file or directory
+2025/09/12 14:23:27 Preloaded: uploads=27 catatan=0
+2025/09/12 14:23:27 Scanning 4 files (workers=16)
+2025/09/12 14:23:27 Watching public/keu (debounced) ...
+2025/09/14 21:11:15 Preloaded: uploads=27 catatan=0
+2025/09/14 21:11:15 Scanning 4 files (workers=16)
+2025/09/14 21:11:15 Watching public/keu (debounced) ...
+2025/09/14 21:11:56 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
+2025/09/14 21:37:20 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
+2025/09/14 21:37:46 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
+2025/09/14 21:38:13 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
+2025/09/14 22:25:36 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
+2025/09/14 22:25:55 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
+2025/09/14 22:25:57 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
+2025/09/14 22:27:06 SKIP unknown owner for tryagainin.jpeg: no upload owner resolved; not creating catatan

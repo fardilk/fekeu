@@ -442,8 +442,15 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 		// Note: proceed to create upload by leaving upExists handling unchanged.
 	}
 
-	// If upload doesn't exist, create it (DB write)
+	// If upload doesn't exist, create it (DB write). Do not create under admin profile.
 	if !upExists {
+		if profile.UserID == 1 {
+			log.Printf("SKIP creating upload for admin profile (user_id=1) file=%s", name)
+			if err := moveToProcessed(filepath.Join(dir, name), name); err != nil {
+				log.Printf("WARN failed to move processed file %s: %v", name, err)
+			}
+			return
+		}
 		newUp := models.Upload{ProfileID: profile.ID, FileName: name, StorePath: storePath}
 		if ct := mimeFromExt(name); ct != "" {
 			newUp.ContentType = ct
@@ -523,8 +530,8 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 		return
 	}
 
-	// Resolve owner from Upload (retry if needed)
-	ownerUserID := profile.UserID
+	// Resolve owner from Upload (retry if needed). Do NOT default to admin; determine from upload/profile.
+	var ownerUserID uint = 0
 	for i := 0; i < 3 && up == nil; i++ { // small retry to avoid race
 		if !upExists {
 			var dbUp models.Upload
@@ -542,6 +549,24 @@ func processSingleFile(dir, name string, profile models.Profile, ps *preloadStat
 			break
 		}
 		time.Sleep(300 * time.Millisecond)
+	}
+
+	// If owner couldn't be determined, as a safety do not attribute to admin implicitly.
+	if ownerUserID == 0 {
+		log.Printf("SKIP unknown owner for %s: no upload owner resolved; not creating catatan", name)
+		if err := moveToProcessed(filepath.Join(dir, name), name); err != nil {
+			log.Printf("WARN failed to move processed file %s: %v", name, err)
+		}
+		return
+	}
+
+	// Never attribute to admin (user_id=1) per business rule.
+	if ownerUserID == 1 {
+		log.Printf("SKIP admin ownership for %s: not creating catatan for admin (user_id=1)", name)
+		if err := moveToProcessed(filepath.Join(dir, name), name); err != nil {
+			log.Printf("WARN failed to move processed file %s: %v", name, err)
+		}
+		return
 	}
 
 	// Create or fetch catatan for the correct owner

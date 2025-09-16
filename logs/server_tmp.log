@@ -1,0 +1,27 @@
+[GIN-debug] [WARNING] Creating an Engine instance with the Logger and Recovery middleware already attached.
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /health                   --> main.healthHandler (4 handlers)
+[GIN-debug] POST   /register                 --> main.registerHandler (4 handlers)
+[GIN-debug] POST   /login                    --> main.loginHandler (4 handlers)
+[GIN-debug] POST   /refresh                  --> main.refreshHandler (4 handlers)
+[GIN-debug] POST   /revoke                   --> main.revokeRefreshHandler (4 handlers)
+[GIN-debug] GET    /me                       --> main.meHandler (5 handlers)
+[GIN-debug] POST   /profile                  --> main.createProfileHandler (5 handlers)
+[GIN-debug] GET    /profile                  --> main.getProfileHandler (5 handlers)
+[GIN-debug] POST   /catatan                  --> main.createCatatanHandler (5 handlers)
+[GIN-debug] GET    /catatan                  --> main.listCatatanHandler (5 handlers)
+[GIN-debug] GET    /catatan/total            --> main.getCatatanTotalHandler (5 handlers)
+[GIN-debug] GET    /catatan/revenue          --> main.revenueSummaryHandler (5 handlers)
+[GIN-debug] POST   /uploads                  --> main.uploadFileHandler (5 handlers)
+[GIN-debug] GET    /uploads                  --> main.listUploadsHandler (5 handlers)
+[GIN-debug] GET    /uploads/:id              --> main.getUploadHandler (5 handlers)
+[GIN-debug] [WARNING] You trusted all proxies, this is NOT safe. We recommend you to set a value.
+Please check https://pkg.go.dev/github.com/gin-gonic/gin#readme-don-t-trust-all-proxies for details.
+[GIN-debug] Listening and serving HTTP on :8081
+2025/09/10 23:05:33 started watcher process pid=19105, logging to logs/watcher.log
+2025/09/10 23:05:34 login: bind error=invalid character 'u' looking for beginning of object key string headers=map[Accept:[*/*] Content-Length:[39] Content-Type:[application/json] Origin:[http://localhost:5173] User-Agent:[curl/7.81.0]] content_length=39 raw="{username:usertest02,password:test1234}"
+[GIN] 2025/09/10 - 23:05:34 | 400 |     235.688µs |       127.0.0.1 | POST     "/login"
