@@ -1,15 +1,18 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"io"
 	"log"
 	"math"
 	"net/http"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +37,9 @@ var (
 	verbose     bool
 	simulateOCR bool
 )
+
+// psGlobal holds the preload state for status reporting when watcher runs an HTTP status server.
+var psGlobal *preloadState
 
 // MIME mapping to avoid opening files repeatedly
 var extMime = map[string]string{
@@ -100,6 +106,7 @@ func main() {
 	profileID := flag.Uint("profile-id", 0, "Profile ID to assign uploads to (if omitted attempts admin profile)")
 	dryRun := flag.Bool("dry-run", false, "Skip all DB queries and writes; just list / optionally OCR (see --simulate-ocr)")
 	watch := flag.Bool("watch", false, "Watch directory for new files")
+	watcherPort := flag.Int("port", 0, "Optional HTTP port for watcher status server (env WATCHER_PORT also supported)")
 	workers := flag.Int("workers", 0, "Worker pool size (default NumCPU)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose per-file logging")
 	flag.BoolVar(&simulateOCR, "simulate-ocr", false, "In dry-run: actually run OCR to show potential amounts")
@@ -132,6 +139,8 @@ func main() {
 	profile := resolveProfile(*profileID)
 	// preload all uploads & catatan
 	ps := preloadAll(profile)
+	// expose for optional status server
+	psGlobal = ps
 	log.Printf("Preloaded: uploads=%d catatan=%d", len(ps.uploadsByFile), len(ps.catByFile))
 
 	// gather initial file list
@@ -140,9 +149,49 @@ func main() {
 	runWorkerPool(*dirFlag, profile, ps, files, effectiveWorkers(*workers))
 
 	if *watch {
+		// if a port was passed either via flag or env, start a small HTTP server to expose watcher status
+		port := *watcherPort
+		if port == 0 {
+			if v := os.Getenv("WATCHER_PORT"); v != "" {
+				if p, err := strconv.Atoi(v); err == nil {
+					port = p
+				}
+			}
+		}
+		if port > 0 {
+			go startStatusServer(port)
+		}
 		if err := watchDirectory(*dirFlag, profile, ps, effectiveWorkers(*workers)); err != nil {
 			log.Fatalf("watch failed: %v", err)
 		}
+	}
+}
+
+// startStatusServer launches a tiny HTTP server exposing /health and /stats
+func startStatusServer(port int) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+		type stats struct {
+			Uploads int `json:"uploads"`
+			Catatan int `json:"catatan"`
+		}
+		s := stats{}
+		if psGlobal != nil {
+			s.Uploads = len(psGlobal.uploadsByFile)
+			s.Catatan = len(psGlobal.catByFile)
+		}
+		b, _ := json.Marshal(s)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(b)
+	})
+	addr := fmt.Sprintf(":%d", port)
+	log.Printf("Watcher status server listening on %s", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Printf("Watcher status server error: %v", err)
 	}
 }
 
