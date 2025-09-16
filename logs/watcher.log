@@ -120,3 +120,9 @@ Try 'nohup --help' for more information.
 2025/09/14 22:25:55 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
 2025/09/14 22:25:57 SKIP unknown owner for trythis.jpeg: no upload owner resolved; not creating catatan
 2025/09/14 22:27:06 SKIP unknown owner for tryagainin.jpeg: no upload owner resolved; not creating catatan
+2025/09/15 17:09:56 Preloaded: uploads=27 catatan=0
+2025/09/15 17:09:56 Scanning 4 files (workers=16)
+2025/09/15 17:09:56 Watching public/keu (debounced) ...
+2025/09/16 05:26:42 Preloaded: uploads=27 catatan=0
+2025/09/16 05:26:42 Scanning 4 files (workers=16)
+2025/09/16 05:26:42 Watching public/keu (debounced) ...

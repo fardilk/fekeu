@@ -35,6 +35,8 @@ var (
 	simulateOCR bool
 )
 
+// (no global status server)
+
 // MIME mapping to avoid opening files repeatedly
 var extMime = map[string]string{
 	".jpg":  "image/jpeg",
@@ -132,6 +134,7 @@ func main() {
 	profile := resolveProfile(*profileID)
 	// preload all uploads & catatan
 	ps := preloadAll(profile)
+	// no global status server
 	log.Printf("Preloaded: uploads=%d catatan=%d", len(ps.uploadsByFile), len(ps.catByFile))
 
 	// gather initial file list
@@ -140,6 +143,7 @@ func main() {
 	runWorkerPool(*dirFlag, profile, ps, files, effectiveWorkers(*workers))
 
 	if *watch {
+		// start watching without exposing HTTP status server
 		if err := watchDirectory(*dirFlag, profile, ps, effectiveWorkers(*workers)); err != nil {
 			log.Fatalf("watch failed: %v", err)
 		}
