@@ -27,12 +27,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push Docker image
+      - name: Build & push API
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          target: runtime
           platforms: linux/amd64
           tags: |
             ghcr.io/${{ github.repository_owner }}/fekeu:latest
             ghcr.io/${{ github.repository_owner }}/fekeu:${{ github.sha }}
+
+      - name: Build & push OCR watcher
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          target: watcher
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/fekeu:ocr
+            ghcr.io/${{ github.repository_owner }}/fekeu:ocr-${{ github.sha }}
