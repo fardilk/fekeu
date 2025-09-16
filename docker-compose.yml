@@ -9,6 +9,8 @@ services:
       POSTGRES_DB: cat_keu
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - snapcash-net
 
   app:
     image: ghcr.io/fardilk/fekeu:latest
