@@ -5,24 +5,32 @@ ARG GO_VERSION=1.24
 FROM golang:${GO_VERSION}-bullseye AS builder
 WORKDIR /src
 
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    libleptonica-dev \
+    libtesseract-dev \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 # cache go modules
 COPY go.mod go.sum ./
-RUN go env -w GOPROXY=https://proxy.golang.org
-RUN go mod download
+RUN go env -w GOPROXY=https://proxy.golang.org && go mod download
 
 # copy rest of source
 COPY . .
 
-# build static binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -ldflags='-s -w' -o /out/be03_app ./cmd/create_user || true
-
-# If the repo's main app is at top-level, build that too as fallback
+# build main application (enable CGO for gosseract)
 RUN if [ -f ./main.go ]; then \
-      CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o /out/be03_app ./ ; \
-    fi
+            CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o /out/be03_app ./ ; \
+        else \
+            echo "main.go not found" && exit 1; \
+        fi
 
-FROM gcr.io/distroless/static-debian11
+FROM debian:bullseye-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libtesseract-dev ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/be03_app /usr/local/bin/be03_app
-EXPOSE 8081
+EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/be03_app"]
