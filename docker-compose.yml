@@ -47,6 +47,6 @@ services:
 
 networks:
   snapcash-net:
-
+    driver: bridge
 volumes:
   pgdata:
