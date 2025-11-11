@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/gin-gonic/gin"
 )
 
 // ...existing code...
@@ -21,6 +19,13 @@ var jwtSecret []byte // loaded from env JWT_SECRET (fallback to dev default)
 func main() {
 	// Auto-load ./.env if present (no external dependency) before reading vars
 	loadDotEnv()
+	// If platform supplies DATABASE_URL prefer it but keep backward compat with DB_DSN
+	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
+		if os.Getenv("DB_DSN") == "" {
+			// set DB_DSN so existing initDB() continues to work
+			_ = os.Setenv("DB_DSN", dbURL)
+		}
+	}
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		secret = "dev-insecure-secret-change" // development fallback
@@ -37,12 +42,10 @@ func main() {
 
 	initDB()
 
-	r := gin.Default()
+	r := BuildChiRouter()
 
-	// Register CORS middleware early so all routes covered
-	r.Use(corsMiddleware())
-
-	setupRoutes(r)
+	// wrap with CORS
+	h := corsMiddleware()(r)
 
 	// Start file watcher in background so `go run .` also runs the watcher.
 	go startWatcherProcess()
@@ -55,7 +58,10 @@ func main() {
 	if strings.TrimSpace(port) == "" {
 		port = "8080"
 	}
-	r.Run(":" + port)
+	log.Printf("starting HTTP server on :%s", port)
+	if err := http.ListenAndServe(":"+port, h); err != nil {
+		log.Fatalf("server error: %v", err)
+	}
 }
 
 // startWatcherProcess launches the existing process watcher as a child process
@@ -87,7 +93,7 @@ func startWatcherProcess() {
 // corsMiddleware allows cross-origin requests from configured origins (comma separated in ALLOWED_ORIGINS).
 // If ALLOWED_ORIGINS is empty, it falls back to common local dev ports.
 // Example .env: ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
-func corsMiddleware() gin.HandlerFunc {
+func corsMiddleware() func(http.Handler) http.Handler {
 	// Read and parse allowed origins once (hot-reload not required for dev convenience)
 	raw := os.Getenv("ALLOWED_ORIGINS")
 	if strings.TrimSpace(raw) == "" {
@@ -125,24 +131,25 @@ func corsMiddleware() gin.HandlerFunc {
 	allowMethods := "GET,POST,PUT,PATCH,DELETE,OPTIONS"
 	allowHeaders := "Authorization,Content-Type,Accept,Origin,X-Requested-With"
 	maxAge := fmt.Sprintf("%d", int((12*time.Hour)/time.Second))
-	return func(c *gin.Context) {
-		origin := c.GetHeader("Origin")
-		if origin != "" {
-			if _, ok := allowed[origin]; ok {
-				c.Header("Access-Control-Allow-Origin", origin)
-				c.Header("Vary", "Origin")
-				c.Header("Access-Control-Allow-Credentials", "true")
-				c.Header("Access-Control-Allow-Methods", allowMethods)
-				c.Header("Access-Control-Allow-Headers", allowHeaders)
-				c.Header("Access-Control-Max-Age", maxAge)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				if _, ok := allowed[origin]; ok {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Vary", "Origin")
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+					w.Header().Set("Access-Control-Allow-Methods", allowMethods)
+					w.Header().Set("Access-Control-Allow-Headers", allowHeaders)
+					w.Header().Set("Access-Control-Max-Age", maxAge)
+				}
 			}
-		}
-		// Handle preflight quickly
-		if c.Request.Method == http.MethodOptions {
-			c.Status(http.StatusNoContent)
-			return
-		}
-		c.Next()
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 

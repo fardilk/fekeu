@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +23,8 @@ import (
 	"be03/models"
 	"be03/pkg/ocr"
 
-	"github.com/gin-gonic/gin"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -31,8 +34,15 @@ import (
 
 var centsRE = regexp.MustCompile(`[.,]\d{2}$`)
 
-func writeError(c *gin.Context, status int, code, msg string, extra gin.H) {
-	body := gin.H{"error": code}
+// lightweight JSON helpers
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, r *http.Request, status int, code, msg string, extra map[string]any) {
+	body := map[string]any{"error": code}
 	if msg != "" {
 		body["message"] = msg
 	}
@@ -40,9 +50,9 @@ func writeError(c *gin.Context, status int, code, msg string, extra gin.H) {
 		body[k] = v
 	}
 	if status >= 500 {
-		log.Printf("HTTP %d error code=%s msg=%s path=%s", status, code, msg, c.FullPath())
+		log.Printf("HTTP %d error code=%s msg=%s path=%s", status, code, msg, r.URL.Path)
 	}
-	c.AbortWithStatusJSON(status, body)
+	writeJSON(w, status, body)
 }
 
 // upload constraints & file sniffing
@@ -92,11 +102,20 @@ func validateAndSniff(f multipart.File, hdr *multipart.FileHeader) (string, []by
 // -------------------- auth & security helpers --------------------
 
 // jwtAuthMiddleware validates bearer token and sets context values
-func jwtAuthMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		h := c.GetHeader("Authorization")
+// context keys
+type ctxKey string
+
+const (
+	ctxUser     ctxKey = "user"
+	ctxUsername ctxKey = "username"
+	ctxRole     ctxKey = "role"
+)
+
+func jwtAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := r.Header.Get("Authorization")
 		if h == "" || !strings.HasPrefix(strings.ToLower(h), "bearer ") {
-			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+			writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 			return
 		}
 		tokenStr := strings.TrimSpace(h[7:])
@@ -107,36 +126,37 @@ func jwtAuthMiddleware() gin.HandlerFunc {
 			return jwtSecret, nil
 		})
 		if err != nil || !token.Valid {
-			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+			writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 			return
 		}
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+			writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 			return
 		}
 		uidF, ok := claims["uid"].(float64)
 		if !ok {
-			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+			writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 			return
 		}
 		username, _ := claims["sub"].(string)
 		role, _ := claims["role"].(string)
 		var user models.User
 		if err := db.First(&user, uint(uidF)).Error; err != nil {
-			writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+			writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 			return
 		}
-		c.Set("user", user)
-		c.Set("username", username)
-		c.Set("role", role)
-		c.Next()
-	}
+		ctx := r.Context()
+		ctx = context.WithValue(ctx, ctxUser, user)
+		ctx = context.WithValue(ctx, ctxUsername, username)
+		ctx = context.WithValue(ctx, ctxRole, role)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
-func getUserFromContext(c *gin.Context) (models.User, bool) {
-	v, ok := c.Get("user")
-	if !ok {
+func getUserFromRequest(r *http.Request) (models.User, bool) {
+	v := r.Context().Value(ctxUser)
+	if v == nil {
 		return models.User{}, false
 	}
 	u, ok := v.(models.User)
@@ -189,19 +209,19 @@ func generateAccessToken(u models.User, roleName string, ttl time.Duration) (str
 func randomHex(n int) string { b := make([]byte, n); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 
 // register/login/refresh/revoke/me handlers
-func registerHandler(c *gin.Context) {
+func registerHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Username) == "" || len(req.Password) < 6 {
-		writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Username) == "" || len(req.Password) < 6 {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", "", nil)
 		return
 	}
 	var cnt int64
 	db.Model(&models.User{}).Where("username = ?", req.Username).Count(&cnt)
 	if cnt > 0 {
-		writeError(c, http.StatusConflict, "duplicate", "username taken", nil)
+		writeError(w, r, http.StatusConflict, "duplicate", "username taken", nil)
 		return
 	}
 	hpw, _ := hashPassword(req.Password)
@@ -211,46 +231,46 @@ func registerHandler(c *gin.Context) {
 	rid := role.ID
 	user := models.User{Username: req.Username, HashedPassword: hpw, RoleID: &rid}
 	if err := db.Create(&user).Error; err != nil {
-		writeError(c, http.StatusInternalServerError, "create_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "create_failed", "", nil)
 		return
 	}
 	// auto create profile placeholder
 	prof := models.Profile{UserID: user.ID, Name: user.Username}
 	_ = db.Create(&prof).Error
-	c.JSON(http.StatusOK, gin.H{"id": user.ID})
+	writeJSON(w, http.StatusOK, map[string]any{"id": user.ID})
 }
 
-func loginHandler(c *gin.Context) {
+func loginHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
 	}
-	// read raw body to aid debugging of bind issues (we'll restore it for the decoder)
-	raw, _ := c.GetRawData()
-	// restore body for subsequent binding
-	c.Request.Body = io.NopCloser(bytes.NewReader(raw))
-	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Username) == "" || req.Password == "" {
+	var buf bytes.Buffer
+	tee := io.TeeReader(r.Body, &buf)
+	decErr := json.NewDecoder(tee).Decode(&req)
+	raw := buf.Bytes()
+	if decErr != nil || strings.TrimSpace(req.Username) == "" || req.Password == "" {
 		// Fallback: accept form-encoded credentials as well
-		if u := strings.TrimSpace(c.PostForm("username")); u != "" {
-			p := c.PostForm("password")
-			if p != "" {
-				req.Username, req.Password = u, p
+		if err := r.ParseForm(); err == nil {
+			if u := strings.TrimSpace(r.Form.Get("username")); u != "" {
+				if p := r.Form.Get("password"); p != "" {
+					req.Username, req.Password = u, p
+				}
 			}
 		}
 		if req.Username == "" || req.Password == "" {
-			// log headers, content length and raw body to help diagnose malformed/missing JSON from clients
-			log.Printf("login: bind error=%v headers=%v content_length=%d raw=%q", err, c.Request.Header, c.Request.ContentLength, string(raw))
-			writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
+			log.Printf("login: bind error=%v headers=%v raw=%q", decErr, r.Header, string(raw))
+			writeError(w, r, http.StatusBadRequest, "invalid_body", "", nil)
 			return
 		}
 	}
 	var user models.User
 	if err := db.Where("username = ?", req.Username).First(&user).Error; err != nil {
-		writeError(c, http.StatusUnauthorized, "invalid_credentials", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "invalid_credentials", "", nil)
 		return
 	}
 	if !checkPassword(user.HashedPassword, req.Password) {
-		writeError(c, http.StatusUnauthorized, "invalid_credentials", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "invalid_credentials", "", nil)
 		return
 	}
 	roleName := "user"
@@ -263,35 +283,35 @@ func loginHandler(c *gin.Context) {
 	at, err := generateAccessToken(user, roleName, 15*time.Minute)
 	if err != nil {
 		log.Printf("generateAccessToken failed: %v", err)
-		writeError(c, http.StatusInternalServerError, "token_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "token_failed", "", nil)
 		return
 	}
 	rawRT := randomHex(32)
 	if _, err := storeRefreshToken(user, rawRT, 7*24*time.Hour); err != nil {
 		// Non-fatal: return access token so FE can proceed. Include empty refresh token to keep response shape stable.
 		log.Printf("login: refresh token store failed (non-fatal): %v", err)
-		c.JSON(http.StatusOK, gin.H{"access_token": at, "refresh_token": "", "token_type": "bearer", "expires_in": 900})
+		writeJSON(w, http.StatusOK, map[string]any{"access_token": at, "refresh_token": "", "token_type": "bearer", "expires_in": 900})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"access_token": at, "refresh_token": rawRT, "token_type": "bearer", "expires_in": 900})
+	writeJSON(w, http.StatusOK, map[string]any{"access_token": at, "refresh_token": rawRT, "token_type": "bearer", "expires_in": 900})
 }
 
-func refreshHandler(c *gin.Context) {
+func refreshHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writeError(c, http.StatusBadRequest, "invalid_body", "", nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", "", nil)
 		return
 	}
 	rt, err := findRefreshTokenByRaw(req.RefreshToken)
 	if err != nil {
-		writeError(c, http.StatusUnauthorized, "invalid_refresh", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "invalid_refresh", "", nil)
 		return
 	}
 	var user models.User
 	if err := db.First(&user, rt.UserID).Error; err != nil {
-		writeError(c, http.StatusUnauthorized, "invalid_refresh", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "invalid_refresh", "", nil)
 		return
 	}
 	roleName := "user"
@@ -303,86 +323,86 @@ func refreshHandler(c *gin.Context) {
 	}
 	at, err := generateAccessToken(user, roleName, 15*time.Minute)
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "token_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "token_failed", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"access_token": at, "token_type": "bearer", "expires_in": 900})
+	writeJSON(w, http.StatusOK, map[string]any{"access_token": at, "token_type": "bearer", "expires_in": 900})
 }
 
-func revokeRefreshHandler(c *gin.Context) {
+func revokeRefreshHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writeError(c, http.StatusBadRequest, "invalid_body", err.Error(), nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", err.Error(), nil)
 		return
 	}
 	rt, err := findRefreshTokenByRaw(req.RefreshToken)
 	if err != nil {
-		writeError(c, http.StatusNotFound, "not_found", "refresh token not found", nil)
+		writeError(w, r, http.StatusNotFound, "not_found", "refresh token not found", nil)
 		return
 	}
 	rt.Revoked = true
 	if err := db.Save(rt).Error; err != nil {
-		writeError(c, http.StatusInternalServerError, "revoke_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "revoke_failed", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "refresh token revoked"})
+	writeJSON(w, http.StatusOK, map[string]any{"message": "refresh token revoked"})
 }
 
-func meHandler(c *gin.Context) {
-	usernameVal, _ := c.Get("username")
+func meHandler(w http.ResponseWriter, r *http.Request) {
+	usernameVal := r.Context().Value(ctxUsername)
 	if usernameVal == nil {
-		writeError(c, http.StatusInternalServerError, "context_missing", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "context_missing", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"username": usernameVal.(string)})
+	writeJSON(w, http.StatusOK, map[string]any{"username": usernameVal.(string)})
 }
 
 // -------------------- profile --------------------
 
-func createProfileHandler(c *gin.Context) {
-	user, ok := getUserFromContext(c)
+func createProfileHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var req struct {
 		Name                              string `json:"name" binding:"required"`
 		Address, Email, Phone, Occupation string
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writeError(c, http.StatusBadRequest, "invalid_body", err.Error(), nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", err.Error(), nil)
 		return
 	}
 	profile := models.Profile{UserID: user.ID, Name: req.Name, Address: req.Address, Email: req.Email, Phone: req.Phone, Occupation: req.Occupation}
 	if err := db.Create(&profile).Error; err != nil {
-		writeError(c, http.StatusInternalServerError, "create_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "create_failed", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": profile.ID})
+	writeJSON(w, http.StatusOK, map[string]any{"id": profile.ID})
 }
 
-func getProfileHandler(c *gin.Context) {
-	user, ok := getUserFromContext(c)
+func getProfileHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var p models.Profile
 	if err := db.Where("user_id = ?", user.ID).First(&p).Error; err != nil {
-		writeError(c, http.StatusNotFound, "not_found", "profile not found", nil)
+		writeError(w, r, http.StatusNotFound, "not_found", "profile not found", nil)
 		return
 	}
-	c.JSON(http.StatusOK, p)
+	writeJSON(w, http.StatusOK, p)
 }
 
 // -------------------- catatan --------------------
 
-func createCatatanHandler(c *gin.Context) {
-	user, ok := getUserFromContext(c)
+func createCatatanHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var req struct {
@@ -390,13 +410,13 @@ func createCatatanHandler(c *gin.Context) {
 		Amount   int64  `json:"amount" binding:"required"`
 		Date     string `json:"date"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writeError(c, http.StatusBadRequest, "invalid_body", err.Error(), nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", err.Error(), nil)
 		return
 	}
 	var existing models.CatatanKeuangan
 	if err := db.Where("user_id = ? AND file_name = ?", user.ID, req.FileName).First(&existing).Error; err == nil {
-		writeError(c, http.StatusConflict, "duplicate", "file already recorded", nil)
+		writeError(w, r, http.StatusConflict, "duplicate", "file already recorded", nil)
 		return
 	}
 	ct := models.CatatanKeuangan{UserID: user.ID, FileName: req.FileName, Amount: req.Amount}
@@ -410,17 +430,17 @@ func createCatatanHandler(c *gin.Context) {
 		ct.Date = time.Now()
 	}
 	if err := db.Create(&ct).Error; err != nil {
-		writeError(c, http.StatusInternalServerError, "create_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "create_failed", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": ct.ID})
+	writeJSON(w, http.StatusOK, map[string]any{"id": ct.ID})
 }
 
-func listCatatanHandler(c *gin.Context) {
-	role, _ := c.Get("role")
-	user, ok := getUserFromContext(c)
+func listCatatanHandler(w http.ResponseWriter, r *http.Request) {
+	role, _ := r.Context().Value(ctxRole).(string)
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var items []models.CatatanKeuangan
@@ -429,17 +449,17 @@ func listCatatanHandler(c *gin.Context) {
 		q = q.Where("user_id = ?", user.ID)
 	}
 	if err := q.Order("id desc").Limit(200).Find(&items).Error; err != nil {
-		writeError(c, http.StatusInternalServerError, "query_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "query_failed", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, items)
+	writeJSON(w, http.StatusOK, items)
 }
 
-func revenueSummaryHandler(c *gin.Context) {
-	role, _ := c.Get("role")
-	user, ok := getUserFromContext(c)
+func revenueSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	role, _ := r.Context().Value(ctxRole).(string)
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	type Result struct {
@@ -453,7 +473,7 @@ func revenueSummaryHandler(c *gin.Context) {
 	}
 	rows, err := q.Select("to_char(date, 'YYYY-MM') as month, sum(amount) as total").Group("month").Rows()
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "query_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "query_failed", "", nil)
 		return
 	}
 	defer rows.Close()
@@ -462,65 +482,61 @@ func revenueSummaryHandler(c *gin.Context) {
 		rows.Scan(&r.Month, &r.Total)
 		results = append(results, r)
 	}
-	c.JSON(http.StatusOK, results)
+	writeJSON(w, http.StatusOK, results)
 }
 
 // getCatatanTotalHandler returns a single total (sum of amount) for the authenticated user.
-func getCatatanTotalHandler(c *gin.Context) {
-	user, ok := getUserFromContext(c)
+func getCatatanTotalHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	// Sum with a single query
 	type Row struct{ Total int64 }
 	var row Row
 	if err := db.Raw("SELECT COALESCE(SUM(amount),0) AS total FROM catatan_keuangans WHERE user_id = ?", user.ID).Scan(&row).Error; err != nil {
-		writeError(c, http.StatusInternalServerError, "query_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "query_failed", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"total": row.Total})
+	writeJSON(w, http.StatusOK, map[string]any{"total": row.Total})
 }
 
 // -------------------- uploads (atomic DB-first) --------------------
 
-func uploadFileHandler(c *gin.Context) {
-	user, ok := getUserFromContext(c)
+func uploadFileHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var profile models.Profile
 	if err := db.Where("user_id = ?", user.ID).First(&profile).Error; err != nil {
-		writeError(c, http.StatusBadRequest, "profile_missing", "profile missing", nil)
+		writeError(w, r, http.StatusBadRequest, "profile_missing", "profile missing", nil)
 		return
 	}
 	// Force uploads into the folder watched by the watcher: public/keu
-	folder := strings.ToLower(strings.TrimSpace(c.PostForm("folder")))
+	_ = r.ParseMultipartForm(10 << 20)
+	folder := strings.ToLower(strings.TrimSpace(r.FormValue("folder")))
 	if folder != "keu" { // normalize any value to the single supported folder
 		folder = "keu"
 	}
-	file, err := c.FormFile("file")
+	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeError(c, http.StatusBadRequest, "missing_file", "file missing", nil)
+		writeError(w, r, http.StatusBadRequest, "missing_file", "file missing", nil)
 		return
 	}
 	// sanitize filename to prevent directory traversal or weird paths
-	cleanName := filepath.Base(file.Filename)
-	src, err := file.Open()
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "open_failed", "", nil)
-		return
-	}
-	mime, firstBytes, verr := func() (string, []byte, error) { defer src.Close(); return validateAndSniff(src, file) }()
+	cleanName := filepath.Base(header.Filename)
+	mime, firstBytes, verr := validateAndSniff(file, header)
 	if verr != nil {
 		switch verr.Error() {
 		case "too_large":
-			writeError(c, http.StatusBadRequest, "file_too_large", "file too large (max 1MB)", nil)
+			writeError(w, r, http.StatusBadRequest, "file_too_large", "file too large (max 1MB)", nil)
 		case "unsupported_type":
-			writeError(c, http.StatusBadRequest, "unsupported_type", "File tidak dikenali, gunakan file lain!", gin.H{"allowed": []string{"image/jpeg", "image/png"}})
+			writeError(w, r, http.StatusBadRequest, "unsupported_type", "File tidak dikenali, gunakan file lain!", map[string]any{"allowed": []string{"image/jpeg", "image/png"}})
 		default:
-			writeError(c, http.StatusBadRequest, "invalid_file", "", nil)
+			writeError(w, r, http.StatusBadRequest, "invalid_file", "", nil)
 		}
 		return
 	}
@@ -549,18 +565,18 @@ func uploadFileHandler(c *gin.Context) {
 	} else {
 		up = models.Upload{ProfileID: profile.ID, FileName: cleanName, StorePath: storePath, KeuanganID: keuID, ContentType: mime}
 		if err := db.Create(&up).Error; err != nil {
-			writeError(c, http.StatusInternalServerError, "db_save_failed", "", nil)
+			writeError(w, r, http.StatusInternalServerError, "db_save_failed", "", nil)
 			return
 		}
 	}
 	// optional manual linkage
-	if v := c.PostForm("keuangan_id"); v != "" {
+	if v := r.FormValue("keuangan_id"); v != "" {
 		if parsed, _ := strconv.ParseUint(v, 10, 64); parsed != 0 {
 			pv := uint(parsed)
 			keuID = &pv
 		}
 	}
-	if amtStr := c.PostForm("amount"); amtStr != "" {
+	if amtStr := r.FormValue("amount"); amtStr != "" {
 		if amtVal, err := strconv.ParseInt(amtStr, 10, 64); err == nil && amtVal > 0 {
 			var existing models.CatatanKeuangan
 			if err := db.Where("user_id = ? AND file_name = ?", user.ID, cleanName).First(&existing).Error; err == nil {
@@ -582,22 +598,22 @@ func uploadFileHandler(c *gin.Context) {
 		if !reprocess {
 			db.Delete(&up)
 		}
-		writeError(c, http.StatusInternalServerError, "mkdir_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "mkdir_failed", "", nil)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 		if !reprocess {
 			db.Delete(&up)
 		}
-		writeError(c, http.StatusInternalServerError, "mkdir_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "mkdir_failed", "", nil)
 		return
 	}
-	tmpName := filepath.Join(stagingDir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), file.Filename))
+	tmpName := filepath.Join(stagingDir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), header.Filename))
 	if err := os.WriteFile(tmpName, firstBytes, 0644); err != nil {
 		if !reprocess {
 			db.Delete(&up)
 		}
-		writeError(c, http.StatusInternalServerError, "save_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "save_failed", "", nil)
 		return
 	}
 	if err := os.Rename(tmpName, fullPath); err != nil {
@@ -605,14 +621,14 @@ func uploadFileHandler(c *gin.Context) {
 			db.Delete(&up)
 		}
 		_ = os.Remove(tmpName)
-		writeError(c, http.StatusInternalServerError, "save_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "save_failed", "", nil)
 		return
 	}
 	log.Printf("OCR: starting on %s for user=%d file=%s", fullPath, profile.UserID, cleanName)
 	amt, _, raw, err := ocr.ExtractAmountFromImage(fullPath)
 	if err != nil {
 		log.Printf("OCR: error on %s: %v", fullPath, err)
-		writeError(c, http.StatusInternalServerError, "ocr_error", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "ocr_error", "", nil)
 		return
 	}
 	log.Printf("OCR: result amount=%d raw=%q for %s", amt, raw, fullPath)
@@ -621,7 +637,7 @@ func uploadFileHandler(c *gin.Context) {
 		up.FailedReason = "Nominal tidak ditemukan, gunakan file lain"
 		db.Save(&up)
 		_ = os.Remove(fullPath)
-		writeError(c, http.StatusBadRequest, "amount_not_found", "Nominal tidak ditemukan, gunakan file lain", nil)
+		writeError(w, r, http.StatusBadRequest, "amount_not_found", "Nominal tidak ditemukan, gunakan file lain", nil)
 		return
 	}
 	if amt > 0 {
@@ -647,14 +663,14 @@ func uploadFileHandler(c *gin.Context) {
 	if catatanID != nil {
 		respCatID = catatanID
 	}
-	c.JSON(http.StatusOK, gin.H{"id": up.ID, "path": relPath, "store_path": storePath, "catatan_id": respCatID})
+	writeJSON(w, http.StatusOK, map[string]any{"id": up.ID, "path": relPath, "store_path": storePath, "catatan_id": respCatID})
 }
 
-func listUploadsHandler(c *gin.Context) {
-	role, _ := c.Get("role")
-	user, ok := getUserFromContext(c)
+func listUploadsHandler(w http.ResponseWriter, r *http.Request) {
+	role, _ := r.Context().Value(ctxRole).(string)
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var profile models.Profile
@@ -665,56 +681,61 @@ func listUploadsHandler(c *gin.Context) {
 		q = q.Where("profile_id = ?", profile.ID)
 	}
 	if err := q.Order("id desc").Limit(100).Find(&uploads).Error; err != nil {
-		writeError(c, http.StatusInternalServerError, "query_failed", "", nil)
+		writeError(w, r, http.StatusInternalServerError, "query_failed", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, uploads)
+	writeJSON(w, http.StatusOK, uploads)
 }
 
-func getUploadHandler(c *gin.Context) {
-	role, _ := c.Get("role")
-	user, ok := getUserFromContext(c)
+func getUploadHandler(w http.ResponseWriter, r *http.Request) {
+	role, _ := r.Context().Value(ctxRole).(string)
+	user, ok := getUserFromRequest(r)
 	if !ok {
-		writeError(c, http.StatusUnauthorized, "unauthorized", "", nil)
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
 		return
 	}
 	var profile models.Profile
 	db.Where("user_id = ?", user.ID).First(&profile)
-	id := c.Param("id")
+	id := chi.URLParam(r, "id")
 	var up models.Upload
 	if err := db.First(&up, id).Error; err != nil {
-		writeError(c, http.StatusNotFound, "not_found", "", nil)
+		writeError(w, r, http.StatusNotFound, "not_found", "", nil)
 		return
 	}
 	if role != "administrator" && up.ProfileID != profile.ID {
-		writeError(c, http.StatusForbidden, "forbidden", "", nil)
+		writeError(w, r, http.StatusForbidden, "forbidden", "", nil)
 		return
 	}
-	c.JSON(http.StatusOK, up)
+	writeJSON(w, http.StatusOK, up)
 }
 
 // -------------------- health --------------------
-func healthHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // -------------------- routes wiring --------------------
-func setupRoutes(r *gin.Engine) {
-	r.GET("/health", healthHandler)
-	r.POST("/register", registerHandler)
-	r.POST("/login", loginHandler)
-	r.POST("/refresh", refreshHandler)
-	r.POST("/revoke", revokeRefreshHandler)
-	auth := r.Group("")
-	auth.Use(jwtAuthMiddleware())
-	auth.GET("/me", meHandler)
-	auth.POST("/profile", createProfileHandler)
-	auth.GET("/profile", getProfileHandler)
-	auth.POST("/catatan", createCatatanHandler)
-	auth.GET("/catatan", listCatatanHandler)
-	auth.GET("/catatan/total", getCatatanTotalHandler)
-	auth.GET("/catatan/revenue", revenueSummaryHandler)
-	auth.POST("/uploads", uploadFileHandler)
-	auth.GET("/uploads", listUploadsHandler)
-	auth.GET("/uploads/:id", getUploadHandler)
+// BuildChiRouter constructs the chi router with all routes and middleware
+func BuildChiRouter() http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
+	r.Get("/health", healthHandler)
+	r.Post("/register", registerHandler)
+	r.Post("/login", loginHandler)
+	r.Post("/refresh", refreshHandler)
+	r.Post("/revoke", revokeRefreshHandler)
+	r.Group(func(ar chi.Router) {
+		ar.Use(jwtAuthMiddleware)
+		ar.Get("/me", meHandler)
+		ar.Post("/profile", createProfileHandler)
+		ar.Get("/profile", getProfileHandler)
+		ar.Post("/catatan", createCatatanHandler)
+		ar.Get("/catatan", listCatatanHandler)
+		ar.Get("/catatan/total", getCatatanTotalHandler)
+		ar.Get("/catatan/revenue", revenueSummaryHandler)
+		ar.Post("/uploads", uploadFileHandler)
+		ar.Get("/uploads", listUploadsHandler)
+		ar.Get("/uploads/{id}", getUploadHandler)
+	})
+	return r
 }

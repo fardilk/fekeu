@@ -2,11 +2,6 @@ package ocr
 
 import "strings"
 
-// isPlausibleAmount applies lightweight heuristics to decide whether a
-// matched numeric substring likely represents a monetary amount rather than
-// a phone number, transaction id, or RRN. The heuristics are intentionally
-// conservative: prefer strings that include currency hints or grouping
-// separators, and reject very long digit-only strings or those starting with 0.
 func isPlausibleAmount(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {

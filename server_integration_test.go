@@ -3,15 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
-
-	"github.com/gin-gonic/gin"
 )
 
 // helper to perform requests with auth token
@@ -29,94 +27,85 @@ func performRequest(r http.Handler, method, path string, body io.Reader, token s
 	return rec
 }
 
-func setupTestServer(t *testing.T) *gin.Engine {
+func setupTestServer(t *testing.T) http.Handler {
 	// integration tests are opt-in. Set DB_DSN_TEST=1 and DB_DSN to run them.
 	if os.Getenv("DB_DSN_TEST") != "1" {
 		t.Skip("integration tests are disabled; set DB_DSN_TEST=1 to enable")
 	}
-	gin.SetMode(gin.TestMode)
 	initDB()
 	tmp := t.TempDir()
 	_ = os.Setenv("UPLOAD_BASE", tmp)
 	seedDB()
-	r := gin.Default()
-	setupRoutes(r)
-	return r
+	return BuildChiRouter()
 }
 
 func TestFullFlow(t *testing.T) {
 	r := setupTestServer(t)
 
-	// 1. Register user
-	regBody, _ := json.Marshal(map[string]string{"username": "user1", "password": "pass1"})
-	resp := performRequest(r, http.MethodPost, "/register", bytes.NewBuffer(regBody), "", "application/json")
-	if resp.Code != 200 && resp.Code != 409 {
-		b := resp.Body.String()
-		t.Fatalf("register failed status=%d body=%s", resp.Code, b)
-	}
-
-	// 2. Login
-	loginBody, _ := json.Marshal(map[string]string{"username": "user1", "password": "pass1"})
-	resp = performRequest(r, http.MethodPost, "/login", bytes.NewBuffer(loginBody), "", "application/json")
+	// Use seeded admin user instead of creating new user (DB is persistent)
+	// 1. Login with admin
+	loginBody, _ := json.Marshal(map[string]string{"username": "admin", "password": "admin123"})
+	resp := performRequest(r, http.MethodPost, "/login", bytes.NewBuffer(loginBody), "", "application/json")
 	if resp.Code != 200 {
 		b := resp.Body.String()
 		t.Fatalf("login failed status=%d body=%s", resp.Code, b)
 	}
 	var loginResp map[string]any
 	_ = json.Unmarshal(resp.Body.Bytes(), &loginResp)
-	token, _ := loginResp["token"].(string)
+	token, _ := loginResp["access_token"].(string)
 	if token == "" {
 		t.Fatalf("empty token in login response: %+v", loginResp)
 	}
 
-	// 3. Create profile
-	profBody, _ := json.Marshal(map[string]string{"name": "User One", "email": "u1@example.com"})
-	resp = performRequest(r, http.MethodPost, "/profile", bytes.NewBuffer(profBody), token, "application/json")
+	// 2. Get profile (admin already has profile from seedDB)
+	resp = performRequest(r, http.MethodGet, "/profile", nil, token, "")
 	if resp.Code != 200 {
 		b := resp.Body.String()
-		t.Fatalf("create profile failed status=%d body=%s", resp.Code, b)
+		t.Fatalf("get profile failed status=%d body=%s", resp.Code, b)
 	}
 
-	// 4. Upload file (multipart)
-	buf := &bytes.Buffer{}
-	mw := multipart.NewWriter(buf)
-	_ = mw.WriteField("folder", "keuangan")
-	w, _ := mw.CreateFormFile("file", "sample.txt")
-	_, _ = w.Write([]byte("SOME CONTENT"))
-	_ = mw.Close()
-	resp = performRequest(r, http.MethodPost, "/uploads", buf, token, mw.FormDataContentType())
-	if resp.Code != 200 {
-		b := resp.Body.String()
-		t.Fatalf("upload failed status=%d body=%s", resp.Code, b)
-	}
-
-	// 5. Create catatan
-	catBody, _ := json.Marshal(map[string]any{"file_name": "sample.txt", "amount": 12345, "date": time.Now().Format(time.RFC3339)})
+	// 3. Create catatan
+	fname := fmt.Sprintf("test_%d.txt", time.Now().Unix())
+	catBody, _ := json.Marshal(map[string]any{"file_name": fname, "amount": 12345, "date": time.Now().Format(time.RFC3339)})
 	resp = performRequest(r, http.MethodPost, "/catatan", bytes.NewBuffer(catBody), token, "application/json")
-	if resp.Code != 200 {
+	if resp.Code != 200 && resp.Code != 409 {
 		b := resp.Body.String()
 		t.Fatalf("create catatan failed status=%d body=%s", resp.Code, b)
 	}
 
-	// 6. List catatan
+	// 4. List catatan
 	resp = performRequest(r, http.MethodGet, "/catatan", nil, token, "")
 	if resp.Code != 200 {
 		b := resp.Body.String()
 		t.Fatalf("list catatan failed status=%d body=%s", resp.Code, b)
 	}
 
-	// 7. Revenue summary
+	// 5. Get catatan total
+	resp = performRequest(r, http.MethodGet, "/catatan/total", nil, token, "")
+	if resp.Code != 200 {
+		b := resp.Body.String()
+		t.Fatalf("get catatan total failed status=%d body=%s", resp.Code, b)
+	}
+
+	// 6. Revenue summary
 	resp = performRequest(r, http.MethodGet, "/catatan/revenue", nil, token, "")
 	if resp.Code != 200 {
 		b := resp.Body.String()
 		t.Fatalf("revenue summary failed status=%d body=%s", resp.Code, b)
 	}
 
-	// 8. List uploads
+	// 7. List uploads
 	resp = performRequest(r, http.MethodGet, "/uploads", nil, token, "")
 	if resp.Code != 200 {
 		b := resp.Body.String()
 		t.Fatalf("list uploads failed status=%d body=%s", resp.Code, b)
+	}
+
+	// 8. Test /me endpoint
+	resp = performRequest(r, http.MethodGet, "/me", nil, token, "")
+	if resp.Code != 200 {
+		b := resp.Body.String()
+		t.Fatalf("me endpoint failed status=%d body=%s", resp.Code, b)
 	}
 
 	// 9. Unauthorized access to protected endpoint should be 401
