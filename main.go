@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,8 +23,44 @@ func main() {
 	// If platform supplies DATABASE_URL prefer it but keep backward compat with DB_DSN
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
 		if os.Getenv("DB_DSN") == "" {
-			// set DB_DSN so existing initDB() continues to work
-			_ = os.Setenv("DB_DSN", dbURL)
+			// sanitize common platform URL variants (strip schema query param and ensure sslmode)
+			if u, err := url.Parse(dbURL); err == nil {
+				q := u.Query()
+				// remove non-libpq `schema` param if present
+				q.Del("schema")
+				if q.Get("sslmode") == "" {
+					q.Set("sslmode", "disable")
+				}
+				u.RawQuery = q.Encode()
+				_ = os.Setenv("DB_DSN", u.String())
+			} else {
+				_ = os.Setenv("DB_DSN", dbURL)
+			}
+		}
+	}
+
+	// Further normalize DB_DSN: if it's a postgres URL form, convert to libpq key=value form
+	if dsn := os.Getenv("DB_DSN"); strings.HasPrefix(dsn, "postgres") {
+		if u, err := url.Parse(dsn); err == nil {
+			usr := ""
+			pwd := ""
+			if u.User != nil {
+				usr = u.User.Username()
+				pwd, _ = u.User.Password()
+			}
+			host := u.Hostname()
+			port := u.Port()
+			if port == "" {
+				port = "5432"
+			}
+			dbname := strings.TrimPrefix(u.Path, "/")
+			q := u.Query()
+			ssl := q.Get("sslmode")
+			if ssl == "" {
+				ssl = "disable"
+			}
+			libpq := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", host, port, usr, pwd, dbname, ssl)
+			_ = os.Setenv("DB_DSN", libpq)
 		}
 	}
 	secret := os.Getenv("JWT_SECRET")
