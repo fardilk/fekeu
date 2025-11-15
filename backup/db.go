@@ -66,12 +66,19 @@ func initDB() {
 		if err := db.AutoMigrate(&models.RefreshToken{}); err != nil {
 			log.Printf("migration warning (refresh_tokens): %v", err)
 		}
+		if err := db.AutoMigrate(&models.PasswordReset{}); err != nil {
+			log.Printf("migration warning (password_resets): %v", err)
+		}
 	}
 
 	// Ensure uploads -> profiles FK exists (in case table existed before adding ProfileID)
 	if shouldMigrate {
 		if err := ensureUploadProfileFK(); err != nil {
 			log.Printf("warning: ensuring uploads->profiles FK failed: %v", err)
+		}
+		// Ensure UUID columns exist for users and profiles (added later)
+		if err := ensureUUIDColumns(); err != nil {
+			log.Printf("warning: ensuring uuid columns failed: %v", err)
 		}
 	}
 	seedDB()
@@ -106,6 +113,26 @@ func ensureUploadProfileFK() error {
 			ON UPDATE CASCADE ON DELETE CASCADE`).Error; err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// ensureUUIDColumns adds uuid columns and unique indexes for users and profiles if missing.
+// Columns are created as type UUID, nullable (so existing rows are allowed). Application-level hooks fill new rows.
+func ensureUUIDColumns() error {
+	// users.uuid
+	if err := db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS uuid UUID`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)`).Error; err != nil {
+		return err
+	}
+	// profiles.uuid
+	if err := db.Exec(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS uuid UUID`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_uuid ON profiles(uuid)`).Error; err != nil {
+		return err
 	}
 	return nil
 }

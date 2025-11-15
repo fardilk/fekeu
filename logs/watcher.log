@@ -126,3 +126,53 @@ Try 'nohup --help' for more information.
 2025/09/16 05:26:42 Preloaded: uploads=27 catatan=0
 2025/09/16 05:26:42 Scanning 4 files (workers=16)
 2025/09/16 05:26:42 Watching public/keu (debounced) ...
+2025/11/15 16:28:07 Preloaded: uploads=0 catatan=0
+2025/11/15 16:28:07 Scanning 4 files (workers=16)
+
+2025/11/15 16:28:07 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[14.489ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/300ribu.jpeg' OR file_name = '300ribu.jpeg' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:07 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[59.449ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/839.jpeg' OR file_name = '839.jpeg' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:07 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[62.554ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/abc 3.png' OR file_name = 'abc 3.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:07 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[62.810ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/3829.png' OR file_name = '3829.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:07 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[13.455ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/300ribu.jpeg' OR file_name = '300ribu.jpeg' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:07 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[7.005ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/839.jpeg' OR file_name = '839.jpeg' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:08 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[7.057ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/3829.png' OR file_name = '3829.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:08 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[65.706ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/abc 3.png' OR file_name = 'abc 3.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:08 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[7.091ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/300ribu.jpeg' OR file_name = '300ribu.jpeg' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:08 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[7.010ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/839.jpeg' OR file_name = '839.jpeg' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:08 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[6.903ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/3829.png' OR file_name = '3829.png' ORDER BY "uploads"."id" LIMIT 1
+
+2025/11/15 16:28:08 [31;1m/home/tw-fardil/Documents/Fardil/Project/be03/process/process_keu.go:421 [35;1mrecord not found
+[0m[33m[7.192ms] [34;1m[rows:0][0m SELECT * FROM "uploads" WHERE store_path = 'public/keu/abc 3.png' OR file_name = 'abc 3.png' ORDER BY "uploads"."id" LIMIT 1
+2025/11/15 16:28:08 SKIP creating upload for admin profile (user_id=1) file=300ribu.jpeg
+2025/11/15 16:28:08 SKIP creating upload for admin profile (user_id=1) file=839.jpeg
+2025/11/15 16:28:08 SKIP creating upload for admin profile (user_id=1) file=3829.png
+2025/11/15 16:28:08 SKIP creating upload for admin profile (user_id=1) file=abc 3.png
+2025/11/15 16:28:08 Watching public/keu (debounced) ...
+signal: interrupt
+2025/11/15 16:29:03 Preloaded: uploads=0 catatan=0
+2025/11/15 16:29:03 Scanning 0 files (workers=16)
+2025/11/15 16:29:03 Watching public/keu (debounced) ...
+2025/11/15 16:33:45 Preloaded: uploads=0 catatan=0
+2025/11/15 16:33:45 Scanning 0 files (workers=16)
+2025/11/15 16:33:45 Watching public/keu (debounced) ...

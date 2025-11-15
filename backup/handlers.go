@@ -22,6 +22,7 @@ import (
 
 	"be03/models"
 	"be03/pkg/ocr"
+	"be03/services"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -207,6 +208,73 @@ func generateAccessToken(u models.User, roleName string, ttl time.Duration) (str
 }
 
 func randomHex(n int) string { b := make([]byte, n); _, _ = rand.Read(b); return hex.EncodeToString(b) }
+
+// -------------------- forgot/reset/change password --------------------
+
+func forgotPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Identifier string `json:"identifier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Identifier) == "" {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", "", nil)
+		return
+	}
+	// Always respond 200 to avoid user enumeration
+	_ = services.RequestPasswordReset(db, req.Identifier)
+	writeJSON(w, http.StatusOK, map[string]any{"message": "If the account exists, an OTP has been sent"})
+}
+
+func verifyForgotPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+		OTP   string `json:"otp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || req.OTP == "" {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", "", nil)
+		return
+	}
+	token, err := services.VerifyOTP(db, req.Email, req.OTP)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_otp", "", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"reset_token": token})
+}
+
+func resetPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct{ ResetToken, NewPassword, NewPasswordConfirm string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ResetToken == "" || len(req.NewPassword) < 6 || req.NewPassword != req.NewPasswordConfirm {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", "", nil)
+		return
+	}
+	if err := services.ResetPassword(db, req.ResetToken, req.NewPassword); err != nil {
+		writeError(w, r, http.StatusBadRequest, "reset_failed", "", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message": "password updated"})
+}
+
+func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := getUserFromRequest(r)
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "", nil)
+		return
+	}
+	var req struct{ OldPassword, NewPassword, NewPasswordConfirm string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OldPassword == "" || len(req.NewPassword) < 6 || req.NewPassword != req.NewPasswordConfirm {
+		writeError(w, r, http.StatusBadRequest, "invalid_body", "", nil)
+		return
+	}
+	if err := services.ChangePassword(db, user.ID, req.OldPassword, req.NewPassword); err != nil {
+		if err.Error() == "invalid_old_password" {
+			writeError(w, r, http.StatusBadRequest, "invalid_old_password", "", nil)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "change_failed", "", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message": "password changed"})
+}
 
 // register/login/refresh/revoke/me handlers
 func registerHandler(w http.ResponseWriter, r *http.Request) {
@@ -724,9 +792,14 @@ func BuildChiRouter() http.Handler {
 	r.Post("/login", loginHandler)
 	r.Post("/refresh", refreshHandler)
 	r.Post("/revoke", revokeRefreshHandler)
+	// forgot/reset password flows
+	r.Post("/auth/forgot-password", forgotPasswordHandler)
+	r.Post("/auth/forgot-password/verify", verifyForgotPasswordHandler)
+	r.Post("/auth/reset-password", resetPasswordHandler)
 	r.Group(func(ar chi.Router) {
 		ar.Use(jwtAuthMiddleware)
 		ar.Get("/me", meHandler)
+		ar.Put("/auth/change-password", changePasswordHandler)
 		ar.Post("/profile", createProfileHandler)
 		ar.Get("/profile", getProfileHandler)
 		ar.Post("/catatan", createCatatanHandler)

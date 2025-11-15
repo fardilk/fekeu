@@ -1,0 +1,14 @@
+nohup: ignoring input
+
+2025/11/15 16:28:59 [32m/home/tw-fardil/Documents/Fardil/Project/be03/internal/persistence/db.go:58 [33mSLOW SQL >= 200ms
+[0m[31;1m[260.635ms] [33m[rows:1][35m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND table_type = 'BASE TABLE'[0m
+
+2025/11/15 16:29:00 [32m/home/tw-fardil/Documents/Fardil/Project/be03/internal/persistence/db.go:58 [33mSLOW SQL >= 200ms
+[0m[31;1m[306.412ms] [33m[rows:-][35m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'fn_dev' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'roles' AND constraint_type = 'UNIQUE'[0m
+
+2025/11/15 16:29:01 [32m/home/tw-fardil/Documents/Fardil/Project/be03/internal/persistence/db.go:86 [33mSLOW SQL >= 200ms
+[0m[31;1m[217.740ms] [33m[rows:-][35m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'fn_dev' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'roles'[0m
+2025/11/15 16:29:03 Starting HTTP server on :8082
+2025/11/15 16:29:03 started watcher process pid=139815, logging to logs/watcher.log
+2025/11/15 16:29:03 [TW-fardil/uJ5EOejFPa-000001] "POST http://localhost:8082/login HTTP/1.1" from 127.0.0.1:43128 - 200 319B in 201.379701ms
+2025/11/15 16:29:22 [TW-fardil/uJ5EOejFPa-000002] "GET http://localhost:8082/me HTTP/1.1" from 127.0.0.1:39952 - 200 22B in 139.973378ms

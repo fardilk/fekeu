@@ -1,0 +1,20 @@
+nohup: ignoring input
+
+2025/11/15 16:33:41 [32m/home/tw-fardil/Documents/Fardil/Project/be03/internal/persistence/db.go:58 [33mSLOW SQL >= 200ms
+[0m[31;1m[200.994ms] [33m[rows:1][35m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND table_type = 'BASE TABLE'[0m
+
+2025/11/15 16:33:41 [32m/home/tw-fardil/Documents/Fardil/Project/be03/internal/persistence/db.go:58 [33mSLOW SQL >= 200ms
+[0m[31;1m[312.296ms] [33m[rows:-][35m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'fn_dev' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'roles' AND constraint_type = 'UNIQUE'[0m
+
+2025/11/15 16:33:42 [32m/home/tw-fardil/Documents/Fardil/Project/be03/internal/persistence/db.go:58 [33mSLOW SQL >= 200ms
+[0m[31;1m[242.708ms] [33m[rows:-][35m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'roles'[0m
+2025/11/15 16:33:45 Starting HTTP server on :8082
+2025/11/15 16:33:45 started watcher process pid=142834, logging to logs/watcher.log
+
+2025/11/15 16:34:09 [32m/home/tw-fardil/Documents/Fardil/Project/be03/internal/http/handlers/user_handler.go:242 [33mSLOW SQL >= 200ms
+[0m[31;1m[222.391ms] [33m[rows:1][35m INSERT INTO "refresh_tokens" ("created_at","updated_at","user_id","token_hash","expires_at","revoked") VALUES ('2025-11-15 16:34:08.946','2025-11-15 16:34:08.946',2,'d9fc8d1d3b8eb2b1b56223b224838ada6f21ba6e43354da6a8afed82bd0826eb','2025-11-22 16:34:08.938',false) RETURNING "id"[0m
+2025/11/15 16:34:09 [TW-fardil/7QXGvQJ5up-000001] "POST http://localhost:8082/login HTTP/1.1" from 127.0.0.1:52274 - 200 319B in 464.201804ms
