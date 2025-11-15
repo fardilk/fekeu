@@ -1,60 +1,41 @@
-# Multi-stage Dockerfile for building the be03 Go app and publishing to GHCR
-# Usage in GH Actions: build the image and push to ghcr.io/${{ github.repository_owner }}/fekeu:tag
+##############################
+# BUILD API
+##############################
 
-ARG GO_VERSION=1.24
-FROM golang:${GO_VERSION}-bullseye AS builder
-WORKDIR /src
+FROM golang:1.24 AS builder
+WORKDIR /app
 
-ENV DEBIAN_FRONTEND=noninteractive
+# Install deps for OCR (gosseract)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     libleptonica-dev \
     libtesseract-dev \
-    ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
-# cache go modules
 COPY go.mod go.sum ./
-RUN go env -w GOPROXY=https://proxy.golang.org && go mod download
+RUN go mod download
 
-# copy rest of source
 COPY . .
 
-# build main application (enable CGO for gosseract)
-RUN if [ -f ./main.go ]; then \
-            CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o /out/be03_app ./ ; \
-        elif [ -d ./cmd ]; then \
-            CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o /out/be03_app ./cmd ; \
-        else \
-            echo "main entrypoint not found (main.go or ./cmd)" && exit 1; \
-        fi
+# Build API binary
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /app/fotonota_api \
+    ./cmd/api
 
-# watcher build (separate binary)
-FROM builder AS watcher-builder
-RUN if [ -d ./process ]; then \
-            CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o /out/be03_watcher ./process ; \
-        elif [ -d ./cmd/watcher ]; then \
-            CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o /out/be03_watcher ./cmd/watcher ; \
-        else \
-            echo "watcher entrypoint not found (./process or ./cmd/watcher)" && exit 1; \
-        fi
+##############################
+# RUNTIME
+##############################
 
-# runtime for main app
-FROM debian:bullseye-slim AS runtime
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libtesseract-dev ca-certificates && \
-        rm -rf /var/lib/apt/lists/*
+FROM debian:bullseye-slim
 
-COPY --from=builder /out/be03_app /usr/local/bin/be03_app
-ENV SERVER_PORT=8081
-EXPOSE 8081
-ENTRYPOINT ["/usr/local/bin/be03_app"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr libtesseract-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# runtime for watcher (final target name: "watcher")
-FROM debian:bullseye-slim AS watcher
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libtesseract-dev ca-certificates && \
-        rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /app/fotonota_api /app/fotonota_api
 
-COPY --from=watcher-builder /out/be03_watcher /usr/local/bin/be03_watcher
-ENTRYPOINT ["/usr/local/bin/be03_watcher"]
+EXPOSE 8080
+
+CMD ["/app/fotonota_api"]
