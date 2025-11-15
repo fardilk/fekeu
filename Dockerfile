@@ -27,7 +27,7 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
 # RUNTIME
 ##############################
 
-FROM debian:bullseye-slim
+FROM ubuntu:22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr libtesseract-dev ca-certificates \
