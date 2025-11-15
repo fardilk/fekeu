@@ -1,10 +1,16 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
 
 // Profile represents a user's profile (one-to-one with User)
 type Profile struct {
-	ID        uint `gorm:"primaryKey"`
+	ID        uint   `gorm:"primaryKey"`
+	UUID      string `gorm:"type:uuid;uniqueIndex;not null"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time `gorm:"index"`
@@ -20,4 +26,12 @@ type Profile struct {
 	Occupation string `gorm:"size:255"`
 	// Uploads is a one-to-many relation from Profile to Upload
 	Uploads []Upload `gorm:"foreignKey:ProfileID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
+}
+
+// BeforeCreate hook sets a UUID on the model if not already provided.
+func (p *Profile) BeforeCreate(tx *gorm.DB) (err error) {
+	if p.UUID == "" {
+		p.UUID = uuid.New().String()
+	}
+	return nil
 }
