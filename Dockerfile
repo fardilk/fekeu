@@ -1,49 +1,61 @@
-# Single-stage build for unified binary
+# ============================
+# 1. BUILDER (Debian Bookworm)
+# ============================
 FROM golang:1.24-bookworm AS builder
 
 WORKDIR /build
 
-# Install Tesseract OCR
-RUN apt-get update && apt-get install -y \
+# Install exact OCR deps (Bookworm = Tesseract 5.x)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     libtesseract-dev \
     libleptonica-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source code
+# Copy full source
 COPY . .
 
-# Build single unified binary
-RUN CGO_ENABLED=1 GOOS=linux go build -o fotonota_api ./cmd/api
+# Build unified API binary
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /build/fotonota_api \
+    ./cmd/api
 
-# Runtime stage
-FROM ubuntu:22.04
+
+# ============================
+# 2. RUNTIME (Bookworm)
+# ============================
+FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Install ONLY required runtime OCR libs (matching builder version)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
+    libtesseract-dev \
+    libleptonica-dev \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binary from builder
-COPY --from=builder /build/fotonota_api .
+# Copy built binary
+COPY --from=builder /build/fotonota_api /app/fotonota_api
 
-# Create necessary directories
-RUN mkdir -p public/keu public/processed public/failed uploads logs
+# Prepare directories
+RUN mkdir -p /app/public/keu \
+             /app/public/processed \
+             /app/public/failed \
+             /app/uploads \
+             /app/logs
 
-# Set permissions
-RUN chmod +x fotonota_api
+RUN chmod +x /app/fotonota_api
 
-# Expose port
 EXPOSE 8080
 
-# Run unified binary
-CMD ["./fotonota_api"]
+CMD ["/app/fotonota_api"]
