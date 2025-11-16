@@ -1,7 +1,14 @@
 # API Endpoint Documentation
 
 ## Base URL
-`http://localhost:8080` (default) or configured via `PORT` env var
+Local development: `http://localhost:8080` (default) or configured via `PORT` env var
+
+Production / VPS: `http://103.172.204.34:8080` (replace port if you run the service on a different port)
+
+Important production notes:
+- Use HTTPS in production (terminate TLS at a reverse proxy like nginx or a load balancer).
+- Ensure the server is reachable on the chosen port and firewall rules allow inbound traffic.
+- Set `PORT` (or `SERVER_PORT`) in your service environment or your Docker configuration to the port you want the server to listen on.
 
 ---
 

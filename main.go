@@ -20,13 +20,10 @@ var jwtSecret []byte // loaded from env JWT_SECRET (fallback to dev default)
 func main() {
 	// Auto-load ./.env if present (no external dependency) before reading vars
 	loadDotEnv()
-	// If platform supplies DATABASE_URL prefer it but keep backward compat with DB_DSN
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
 		if os.Getenv("DB_DSN") == "" {
-			// sanitize common platform URL variants (strip schema query param and ensure sslmode)
 			if u, err := url.Parse(dbURL); err == nil {
 				q := u.Query()
-				// remove non-libpq `schema` param if present
 				q.Del("schema")
 				if q.Get("sslmode") == "" {
 					q.Set("sslmode", "disable")
