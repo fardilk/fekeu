@@ -38,35 +38,20 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # -------------------------
-      # BUILD & PUSH API
+      # BUILD & PUSH UNIFIED BINARY
       # -------------------------
-      - name: Build & Push API image
+      - name: Build & Push Unified API image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: linux/amd64
-          target: runtime
           tags: |
             ghcr.io/${{ github.repository_owner }}/fotonota-be:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/fotonota-be:${{ github.ref_name }}-${{ github.sha }}
 
       # -------------------------
-      # BUILD & PUSH WATCHER
-      # -------------------------
-      - name: Build & Push Watcher image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64
-          target: watcher
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/fotonota-watcher:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/fotonota-watcher:${{ github.ref_name }}-${{ github.sha }}
-
-      # -------------------------
-      # DEPLOY API + WATCHER ke VPS
+      # DEPLOY UNIFIED BINARY to VPS
       # -------------------------
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.1.0
@@ -88,36 +73,33 @@ jobs:
               BASE_PATH="/var/www/be/fotonota-be/dev"
             fi
 
-            echo "=========== PULL API IMAGE ==========="
-            docker pull ghcr.io/${{ github.repository_owner }}/fotonota-be:${{ github.ref_name }}
-
-            echo "=========== STOP OLD API ==========="
-            docker stop fotonota-${{ github.ref_name }} || true
-            docker rm fotonota-${{ github.ref_name }} || true
-
-            echo "=========== START NEW API ==========="
-            docker run -d \
-              --name fotonota-${{ github.ref_name }} \
-              --env-file ${ENV_FILE} \
-              -p ${PORT}:8080 \
-              ghcr.io/${{ github.repository_owner }}/fotonota-be:${{ github.ref_name }}
-
-            echo "=========== PREPARE OCR FOLDERS ==========="
+            echo "=========== PREPARE DIRECTORIES ==========="
             mkdir -p ${BASE_PATH}/public/keu
             mkdir -p ${BASE_PATH}/public/processed
+            mkdir -p ${BASE_PATH}/public/failed
+            mkdir -p ${BASE_PATH}/uploads
+            mkdir -p ${BASE_PATH}/logs
 
-            echo "=========== PULL WATCHER IMAGE ==========="
-            docker pull ghcr.io/${{ github.repository_owner }}/fotonota-watcher:${{ github.ref_name }}
+            echo "=========== PULL UNIFIED IMAGE ==========="
+            docker pull ghcr.io/${{ github.repository_owner }}/fotonota-be:${{ github.ref_name }}
 
-            echo "=========== STOP OLD WATCHER ==========="
+            echo "=========== STOP OLD CONTAINERS ==========="
+            docker stop fotonota-${{ github.ref_name }} || true
+            docker rm fotonota-${{ github.ref_name }} || true
             docker stop fotonota-watcher-${{ github.ref_name }} || true
             docker rm fotonota-watcher-${{ github.ref_name }} || true
 
-            echo "=========== START WATCHER ==========="
+            echo "=========== START UNIFIED BINARY (API + Watcher + Scheduler) ==========="
             docker run -d \
-              --name fotonota-watcher-${{ github.ref_name }} \
-              -v ${BASE_PATH}/public/keu:/app/public/keu \
-              -v ${BASE_PATH}/public/processed:/app/public/processed \
-              ghcr.io/${{ github.repository_owner }}/fotonota-watcher:${{ github.ref_name }}
+              --name fotonota-${{ github.ref_name }} \
+              --env-file ${ENV_FILE} \
+              -e WATCH_DIR=/app/public/keu \
+              -p ${PORT}:8080 \
+              -v ${BASE_PATH}/public:/app/public \
+              -v ${BASE_PATH}/uploads:/app/uploads \
+              -v ${BASE_PATH}/logs:/app/logs \
+              --restart unless-stopped \
+              ghcr.io/${{ github.repository_owner }}/fotonota-be:${{ github.ref_name }}
 
             echo "=========== DEPLOYMENT DONE for ${{ github.ref_name }} ==========="
+            echo "Single binary running with HTTP + Watcher + Scheduler"
